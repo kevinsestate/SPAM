@@ -1,34 +1,3 @@
-"""
-SPAM GUI Mockup
-----------------
-
-This script creates a prototype user interface for the SPAM (Scanner for
-Polarized Anisotropic Materials) project. The goal of the mock‑up is to
-show what a clean and intuitive application might look like for non‑technical
-users during the preliminary design review. The implementation uses the
-standard Tkinter library, which is available in most Python installations.
-
-If you prefer to use ``customtkinter`` or ``PyQt5``, you can adapt the
-layout and widget creation accordingly. At the time this script was
-generated, those libraries were not available in the execution
-environment, so Tkinter was chosen for portability.
-
-Key features of this mockup:
-    • A menu bar with ``File``, ``Settings`` and ``Help`` menus.
-    • A left panel containing large action buttons: Calibrate, Start
-      Measurement, View Results and Export Data.
-    • A central area displaying two placeholder graphs for permittivity
-      (ε) and permeability (μ) versus angle using Matplotlib. These
-      illustrate how measurement results could be visualized.
-    • A right panel summarizing the current measurement information,
-      including angle, permittivity, permeability and system status.
-    • A status bar at the bottom indicating system readiness.
-
-Please note that the buttons and menu items do not implement any
-functionality in this mockup. They simply demonstrate the look and feel
-for the user interface.
-"""
-
 import tkinter as tk
 from tkinter import ttk
 
