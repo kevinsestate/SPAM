@@ -142,14 +142,14 @@ class SPAMGui(tk.Tk):
             "highlightthickness": 0,
         }
 
-        # Create action buttons with icons/symbols
+        # Create action buttons
         actions = [
-            ("⚙  Calibrate", self._on_calibrate, self.COLORS['secondary']),
-            ("▶  Start Measurement", self._on_start_measurement, self.COLORS['success']),
-            ("🛑  Stop Measurement", self._on_stop_measurement, self.COLORS['danger']),
-            ("🗑️  Clear Measurements", self._on_clear_measurements, self.COLORS['warning']),
-            ("📊  View Results", self._on_view_results, self.COLORS['secondary']),
-            ("💾  Export Data", self._on_export, self.COLORS['secondary']),
+            ("Calibrate", self._on_calibrate, self.COLORS['secondary']),
+            ("Start Measurement", self._on_start_measurement, self.COLORS['success']),
+            ("Stop Measurement", self._on_stop_measurement, self.COLORS['danger']),
+            ("Clear Measurements", self._on_clear_measurements, self.COLORS['warning']),
+            ("View Results", self._on_view_results, self.COLORS['secondary']),
+            ("Export Data", self._on_export, self.COLORS['secondary']),
         ]
         
         self.buttons = []
@@ -190,7 +190,7 @@ class SPAMGui(tk.Tk):
         tk.Frame(sidebar_frame, bg=self.COLORS['bg_sidebar']).pack(expand=True)
         
         # Version info at bottom
-        version_label = tk.Label(sidebar_frame, text="Version 1.0.0", 
+        version_label = tk.Label(sidebar_frame, text="Version 1.01", 
                                 bg=self.COLORS['bg_sidebar'],
                                 fg=self.COLORS['text_muted'], 
                                 font=("Segoe UI", 8))
@@ -869,7 +869,7 @@ Latest Measurement:
         """Show help/about dialog."""
         about_text = """SPAM - Scanner for Polarized Anisotropic Materials
         
-Version 1.0.0
+Version 1.01
 
 A local desktop application for scanning and analyzing polarized anisotropic materials.
 
