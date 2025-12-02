@@ -122,13 +122,6 @@ class SPAMGui(tk.Tk):
                         font=("Segoe UI", 24, "bold"))
         title.pack(pady=20)
 
-        # Controls label
-        controls_label = tk.Label(sidebar_frame, text="CONTROLS", 
-                                 bg=self.COLORS['bg_sidebar'],
-                                 fg=self.COLORS['text_muted'], 
-                                 font=("Segoe UI", 10, "bold"))
-        controls_label.pack(padx=20, pady=(10, 15), anchor="w")
-
         # Define a common style for buttons
         button_style = {
             "font": ("Segoe UI", 11, "bold"),
@@ -142,7 +135,7 @@ class SPAMGui(tk.Tk):
             "highlightthickness": 0,
         }
 
-        # Create action buttons
+        # Create action buttons (ordered: Calibrate, Start, Stop, Clear, View, Export)
         actions = [
             ("Calibrate", self._on_calibrate, self.COLORS['secondary']),
             ("Start Measurement", self._on_start_measurement, self.COLORS['success']),
@@ -157,6 +150,7 @@ class SPAMGui(tk.Tk):
         self.stop_button = None
         self.start_container = None
         self.stop_container = None
+        self.clear_container = None  # Reference for positioning
         
         for label, command, bg_color in actions:
             # Container for button with padding
@@ -175,7 +169,7 @@ class SPAMGui(tk.Tk):
             btn.bind('<Enter>', lambda e, b=btn, h=hover_color: b.config(bg=h))
             btn.bind('<Leave>', lambda e, b=btn, c=bg_color: b.config(bg=c))
             
-            # Store references to start/stop buttons and their containers
+            # Store references to start/stop/clear buttons and their containers
             if "Start Measurement" in label:
                 self.start_button = btn
                 self.start_container = btn_container
@@ -183,6 +177,8 @@ class SPAMGui(tk.Tk):
                 self.stop_button = btn
                 self.stop_container = btn_container
                 btn_container.pack_forget()  # Hide initially
+            elif "Clear Measurements" in label:
+                self.clear_container = btn_container
             
             self.buttons.append(btn)
 
@@ -220,13 +216,13 @@ class SPAMGui(tk.Tk):
         self.status_var = tk.StringVar(value="Ready")
 
         info_items = [
-            ("Current Angle", self.angle_var, "🔄"),
-            ("Permittivity (ε)", self.permittivity_var, "⚡"),
-            ("Permeability (μ)", self.permeability_var, "🧲"),
-            ("Status", self.status_var, "●")
+            ("Current Angle", self.angle_var),
+            ("Permittivity (ε)", self.permittivity_var),
+            ("Permeability (μ)", self.permeability_var),
+            ("Status", self.status_var)
         ]
         
-        for label_text, var, icon in info_items:
+        for label_text, var in info_items:
             # Create card-style container for each metric
             card = tk.Frame(info_frame, bg=self.COLORS['bg_panel'], 
                            relief=tk.FLAT, bd=0)
@@ -240,15 +236,9 @@ class SPAMGui(tk.Tk):
             content = tk.Frame(card, bg=self.COLORS['bg_panel'])
             content.pack(fill=tk.BOTH, padx=15, pady=12)
             
-            # Icon and label
+            # Label
             header_row = tk.Frame(content, bg=self.COLORS['bg_panel'])
             header_row.pack(fill=tk.X, pady=(0, 5))
-            
-            icon_lbl = tk.Label(header_row, text=icon, 
-                               bg=self.COLORS['bg_panel'],
-                               fg=self.COLORS['secondary'],
-                               font=("Segoe UI", 14))
-            icon_lbl.pack(side=tk.LEFT, padx=(0, 8))
             
             lbl = tk.Label(header_row, text=label_text, 
                           bg=self.COLORS['bg_panel'],
@@ -419,7 +409,7 @@ class SPAMGui(tk.Tk):
         left_frame = tk.Frame(status_frame, bg=self.COLORS['primary'])
         left_frame.pack(side=tk.LEFT, fill=tk.Y)
         
-        status_indicator = tk.Label(left_frame, text="●", 
+        status_indicator = tk.Label(left_frame, text="*", 
                                    bg=self.COLORS['primary'],
                                    fg=self.COLORS['success'],
                                    font=("Segoe UI", 14))
@@ -669,15 +659,15 @@ class SPAMGui(tk.Tk):
 
     def _update_button_states(self):
         """Update button visibility based on measurement state."""
-        if hasattr(self, 'start_container') and hasattr(self, 'stop_container'):
+        if hasattr(self, 'start_container') and hasattr(self, 'stop_container') and hasattr(self, 'clear_container'):
             if self.is_measuring:
-                # Hide start, show stop
+                # Hide start, show stop in the same position (before Clear)
                 self.start_container.pack_forget()
-                self.stop_container.pack(padx=20, pady=8, fill=tk.X)
+                self.stop_container.pack(padx=20, pady=8, fill=tk.X, before=self.clear_container)
             else:
-                # Show start, hide stop
+                # Show start, hide stop (start goes back to its position before Clear)
                 self.stop_container.pack_forget()
-                self.start_container.pack(padx=20, pady=8, fill=tk.X)
+                self.start_container.pack(padx=20, pady=8, fill=tk.X, before=self.clear_container)
     
     def _on_start_measurement(self) -> None:
         """Start a new measurement session."""
@@ -775,8 +765,7 @@ class SPAMGui(tk.Tk):
         latest = measurements[0] if measurements else None
         
         # Create summary message
-        summary = f"""Measurement Results Summary
-{'=' * 40}
+        summary = f"""Measurement Results Summary:
 
 Total Measurements: {count}
 Angle Range: {angle_min:.1f}° to {angle_max:.1f}°
