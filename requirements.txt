@@ -2,7 +2,7 @@
 # For Raspberry Pi and local desktop use
 
 # Database
-sqlalchemy==2.0.23
+sqlalchemy>=2.0.23
 
 # GUI
 matplotlib>=3.7.0

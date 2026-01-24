@@ -7,10 +7,19 @@ import csv
 from datetime import datetime
 import threading
 import time
+import platform
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
+
+# Enable DPI awareness on Windows for better resolution
+if platform.system() == 'Windows':
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)  # Enable DPI awareness
+    except:
+        pass  # If DPI awareness fails, continue anyway
 
 # Add backend directory to path to import database modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
@@ -42,14 +51,32 @@ class SPAMGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("SPAM - Scanner for Polarized Anisotropic Materials")
-        # Set a reasonable window size; users can resize if needed
-        self.geometry("1920x1080")
+        
+        # Get screen dimensions for better initial sizing
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Start in maximized state for better experience (Windows) or use geometry for others
+        if platform.system() == 'Windows':
+            self.state('zoomed')  # Windows maximized
+        else:
+            # For Linux/Mac, use a large window size
+            self.geometry(f"{min(screen_width, 1920)}x{min(screen_height, 1080)}")
+            self.update_idletasks()
+            # Center the window
+            x = (screen_width - self.winfo_width()) // 2
+            y = (screen_height - self.winfo_height()) // 2
+            self.geometry(f"+{x}+{y}")
+        
         # Use a modern light theme background
         self.configure(bg=self.COLORS['bg_main'])
+        
+        # Track fullscreen state
+        self.is_fullscreen = False
 
-        # Initialize database
-        Base.metadata.create_all(bind=engine)
-        self.db = SessionLocal()
+        # Initialize debug logging first (before any log calls)
+        self.debug_log = []
+        self.debug_window = None
         
         # Measurement state
         self.is_measuring = False
@@ -57,6 +84,12 @@ class SPAMGui(tk.Tk):
         self.current_angle = 0.0
         self.current_permittivity = 2.00
         self.current_permeability = 1.50
+
+        # Initialize database
+        Base.metadata.create_all(bind=engine)
+        self.db = SessionLocal()
+        self._log_debug("Application initialized", "INFO")
+        self._log_debug(f"Database connection established: {engine.url}", "INFO")
 
         # Build top‑level components
         self._create_menu()
@@ -94,11 +127,24 @@ class SPAMGui(tk.Tk):
         settings_menu.add_command(label="Connection Setup",
                                   command=self._on_settings)
         menubar.add_cascade(label="Settings", menu=settings_menu)
+        # View menu
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Debug Console", command=self._on_debug_console,
+                             accelerator="Ctrl+D")
+        view_menu.add_separator()
+        view_menu.add_command(label="Fullscreen", command=self._toggle_fullscreen,
+                             accelerator="F11")
+        menubar.add_cascade(label="View", menu=view_menu)
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="About SPAM", command=self._on_help)
         help_menu.add_command(label="User Guide", command=self._on_help)
         menubar.add_cascade(label="Help", menu=help_menu)
+        
+        # Bind keyboard shortcuts
+        self.bind('<Control-d>', lambda e: self._on_debug_console())
+        self.bind('<F11>', lambda e: self._toggle_fullscreen())
+        self.bind('<Escape>', lambda e: self._exit_fullscreen() if self.is_fullscreen else None)
 
         self.config(menu=menubar)
 
@@ -135,7 +181,7 @@ class SPAMGui(tk.Tk):
             "highlightthickness": 0,
         }
 
-        # Create action buttons (ordered: Calibrate, Start, Stop, Clear, View, Export)
+        # Create action buttons (ordered: Calibrate, Start, Stop, Clear, View, Export, Debug)
         actions = [
             ("Calibrate", self._on_calibrate, self.COLORS['secondary']),
             ("Start Measurement", self._on_start_measurement, self.COLORS['success']),
@@ -143,6 +189,7 @@ class SPAMGui(tk.Tk):
             ("Clear Measurements", self._on_clear_measurements, self.COLORS['warning']),
             ("View Results", self._on_view_results, self.COLORS['secondary']),
             ("Export Data", self._on_export, self.COLORS['secondary']),
+            ("Debug Console", self._on_debug_console, self.COLORS['text_muted']),
         ]
         
         self.buttons = []
@@ -286,61 +333,117 @@ class SPAMGui(tk.Tk):
     # Center panel with graphs
     # ------------------------------------------------------------------
     def _create_center_panel(self) -> None:
-        """Create the central area containing two Matplotlib graphs."""
+        """Create the central area containing two Matplotlib graphs with scrolling."""
         center_frame = tk.Frame(self, bg=self.COLORS['bg_main'])
         center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(15, 0), pady=15)
 
-        # Title for the graphs section
+        # Title for the graphs section (fixed at top)
         title_frame = tk.Frame(center_frame, bg=self.COLORS['bg_main'])
-        title_frame.pack(fill=tk.X, pady=(5, 15))
+        title_frame.pack(fill=tk.X, pady=(5, 10))
         
         title = tk.Label(title_frame, text="Real-Time Measurements",
                         bg=self.COLORS['bg_main'],
                         fg=self.COLORS['text_dark'],
                         font=("Segoe UI", 16, "bold"))
         title.pack(side=tk.LEFT)
+        
+        # Create scrollable frame for graphs
+        # Create canvas and scrollbar
+        canvas_container = tk.Frame(center_frame, bg=self.COLORS['bg_main'])
+        canvas_container.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = tk.Scrollbar(canvas_container, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        canvas = tk.Canvas(canvas_container, 
+                          bg=self.COLORS['bg_main'],
+                          yscrollcommand=scrollbar.set,
+                          highlightthickness=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar.config(command=canvas.yview)
+        
+        # Create scrollable frame inside canvas
+        scrollable_frame = tk.Frame(canvas, bg=self.COLORS['bg_main'])
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        # Function to update scroll region and canvas width
+        def configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Make canvas width match scrollable_frame width
+            canvas_width = event.width
+            canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        def on_canvas_configure(event):
+            canvas_width = event.width
+            canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        scrollable_frame.bind("<Configure>", configure_scroll_region)
+        canvas.bind("<Configure>", on_canvas_configure)
+        
+        # Enable mousewheel scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        
+        # For Linux, use Button-4 and Button-5
+        def on_mousewheel_linux(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+        
+        canvas.bind_all("<Button-4>", on_mousewheel_linux)
+        canvas.bind_all("<Button-5>", on_mousewheel_linux)
 
         # Initialize with empty data - will be populated from database
         angles = np.array([])
         permittivity = np.array([])
         permeability = np.array([])
 
-        # Graph styling configuration
+        # Graph styling configuration - improved for better quality
         graph_style = {
             'facecolor': self.COLORS['bg_panel'],
             'titlecolor': self.COLORS['text_dark'],
-            'titlesize': 14,
+            'titlesize': 14,  # Balanced size
             'titleweight': 'bold',
             'labelcolor': self.COLORS['text_dark'],
-            'labelsize': 11,
+            'labelsize': 11,  # Balanced size
             'linecolor': self.COLORS['secondary'],
-            'linewidth': 2.5,
+            'linewidth': 2.5,  # Good visibility without being too thick
             'gridcolor': self.COLORS['border'],
             'gridalpha': 0.3,
+            'dpi': 100,  # Standard DPI for proper sizing
         }
 
-        # Container for permittivity graph
-        graph1_container = tk.Frame(center_frame, bg=self.COLORS['bg_panel'], 
-                                   relief=tk.FLAT, bd=0)
-        graph1_container.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        # Container for permittivity graph (inside scrollable frame)
+        graph1_container = tk.Frame(scrollable_frame, bg=self.COLORS['bg_panel'], 
+                                   relief=tk.FLAT, bd=0, height=400)
+        graph1_container.pack(fill=tk.X, pady=(0, 15), padx=5)
+        graph1_container.pack_propagate(False)  # Prevent shrinking
         
-        # Permittivity figure
-        fig1 = Figure(figsize=(5, 2.5), dpi=100, facecolor=graph_style['facecolor'])
+        # Permittivity figure - properly sized to fit container
+        fig1 = Figure(figsize=(6, 3.5), dpi=graph_style['dpi'], facecolor=graph_style['facecolor'])
         ax1 = fig1.add_subplot(111, facecolor=graph_style['facecolor'])
-        ax1.plot(angles, permittivity, color=graph_style['linecolor'], 
-                linewidth=graph_style['linewidth'], label='ε')
+        # Set axis limits before plotting (even if empty)
+        ax1.set_xlim(0, 90)
+        ax1.set_ylim(1.5, 2.5)  # Reasonable range for permittivity
+        if len(angles) > 0:
+            ax1.plot(angles, permittivity, color=graph_style['linecolor'], 
+                    linewidth=graph_style['linewidth'], label='ε')
         ax1.set_title("Permittivity (ε) vs Angle", 
                      color=graph_style['titlecolor'],
                      fontsize=graph_style['titlesize'],
                      fontweight=graph_style['titleweight'],
                      pad=15)
         ax1.set_xlabel("Angle (degrees)", color=graph_style['labelcolor'],
-                      fontsize=graph_style['labelsize'])
+                      fontsize=graph_style['labelsize'], fontweight='medium')
         ax1.set_ylabel("Permittivity (ε)", color=graph_style['labelcolor'],
-                      fontsize=graph_style['labelsize'])
+                      fontsize=graph_style['labelsize'], fontweight='medium')
         ax1.grid(True, alpha=graph_style['gridalpha'], 
                 color=graph_style['gridcolor'], linestyle='--')
-        ax1.tick_params(colors=graph_style['labelcolor'])
+        ax1.tick_params(colors=graph_style['labelcolor'], labelsize=9)
         ax1.spines['top'].set_visible(False)
         ax1.spines['right'].set_visible(False)
         ax1.spines['left'].set_color(graph_style['gridcolor'])
@@ -351,28 +454,33 @@ class SPAMGui(tk.Tk):
         canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         canvas1.draw()
 
-        # Container for permeability graph
-        graph2_container = tk.Frame(center_frame, bg=self.COLORS['bg_panel'], 
-                                   relief=tk.FLAT, bd=0)
-        graph2_container.pack(fill=tk.BOTH, expand=True)
+        # Container for permeability graph (inside scrollable frame)
+        graph2_container = tk.Frame(scrollable_frame, bg=self.COLORS['bg_panel'], 
+                                   relief=tk.FLAT, bd=0, height=400)
+        graph2_container.pack(fill=tk.X, pady=(0, 15), padx=5)
+        graph2_container.pack_propagate(False)  # Prevent shrinking
 
-        # Permeability figure
-        fig2 = Figure(figsize=(5, 2.5), dpi=100, facecolor=graph_style['facecolor'])
+        # Permeability figure - properly sized to fit container
+        fig2 = Figure(figsize=(6, 3.5), dpi=graph_style['dpi'], facecolor=graph_style['facecolor'])
         ax2 = fig2.add_subplot(111, facecolor=graph_style['facecolor'])
-        ax2.plot(angles, permeability, color=self.COLORS['accent'], 
-                linewidth=graph_style['linewidth'], label='μ')
+        # Set axis limits before plotting (even if empty)
+        ax2.set_xlim(0, 90)
+        ax2.set_ylim(1.0, 2.0)  # Reasonable range for permeability
+        if len(angles) > 0:
+            ax2.plot(angles, permeability, color=self.COLORS['accent'], 
+                    linewidth=graph_style['linewidth'], label='μ')
         ax2.set_title("Permeability (μ) vs Angle", 
                      color=graph_style['titlecolor'],
                      fontsize=graph_style['titlesize'],
                      fontweight=graph_style['titleweight'],
                      pad=15)
         ax2.set_xlabel("Angle (degrees)", color=graph_style['labelcolor'],
-                      fontsize=graph_style['labelsize'])
+                      fontsize=graph_style['labelsize'], fontweight='medium')
         ax2.set_ylabel("Permeability (μ)", color=graph_style['labelcolor'],
-                      fontsize=graph_style['labelsize'])
+                      fontsize=graph_style['labelsize'], fontweight='medium')
         ax2.grid(True, alpha=graph_style['gridalpha'], 
                 color=graph_style['gridcolor'], linestyle='--')
-        ax2.tick_params(colors=graph_style['labelcolor'])
+        ax2.tick_params(colors=graph_style['labelcolor'], labelsize=9)
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
         ax2.spines['left'].set_color(graph_style['gridcolor'])
@@ -384,6 +492,8 @@ class SPAMGui(tk.Tk):
         canvas2.draw()
 
         self.center_frame = center_frame
+        self.scrollable_frame = scrollable_frame
+        self.graphs_canvas = canvas
         self.fig1 = fig1
         self.ax1 = ax1
         self.canvas1 = canvas1
@@ -395,6 +505,22 @@ class SPAMGui(tk.Tk):
         self.measurement_angles = []
         self.measurement_permittivity = []
         self.measurement_permeability = []
+        
+        # Bind resize event to update graphs for better responsiveness
+        def on_resize(event):
+            if hasattr(self, 'fig1') and hasattr(self, 'fig2'):
+                try:
+                    self.fig1.tight_layout(pad=2.0)
+                    self.fig2.tight_layout(pad=2.0)
+                    self.canvas1.draw()
+                    self.canvas2.draw()
+                    # Update scroll region after resize
+                    if hasattr(self, 'graphs_canvas'):
+                        self.graphs_canvas.configure(scrollregion=self.graphs_canvas.bbox("all"))
+                except:
+                    pass  # Ignore errors during resize
+        
+        self.bind('<Configure>', on_resize)
 
     # ------------------------------------------------------------------
     # Status bar
@@ -462,10 +588,13 @@ class SPAMGui(tk.Tk):
             self.db.add(measurement)
             self.db.commit()
             self.db.refresh(measurement)
+            self._log_debug(f"Measurement recorded: Angle={angle:.2f}°, ε={permittivity:.4f}, μ={permeability:.4f}", "DEBUG")
             return measurement
         except Exception as e:
             self.db.rollback()
-            print(f"Error creating measurement: {e}")
+            error_msg = f"Error creating measurement: {e}"
+            print(error_msg)
+            self._log_debug(error_msg, "ERROR")
             return None
     
     def _create_calibration(self, parameters=None):
@@ -490,22 +619,40 @@ class SPAMGui(tk.Tk):
         measurements = self._get_measurements()
         
         if not measurements:
-            # Show empty graphs
+            # Show empty graphs with proper axis limits
             self.ax1.clear()
             self.ax2.clear()
+            self.ax1.set_xlim(0, 90)
+            self.ax1.set_ylim(1.5, 2.5)
             self.ax1.set_title("Permittivity (ε) vs Angle", 
                              color=self.COLORS['text_dark'],
                              fontsize=14, fontweight='bold', pad=15)
-            self.ax1.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], fontsize=11)
-            self.ax1.set_ylabel("Permittivity (ε)", color=self.COLORS['text_dark'], fontsize=11)
+            self.ax1.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
+            self.ax1.set_ylabel("Permittivity (ε)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
             self.ax1.grid(True, alpha=0.3, color=self.COLORS['border'], linestyle='--')
+            self.ax1.tick_params(colors=self.COLORS['text_dark'], labelsize=9)
+            self.ax1.spines['top'].set_visible(False)
+            self.ax1.spines['right'].set_visible(False)
+            self.ax1.spines['left'].set_color(self.COLORS['border'])
+            self.ax1.spines['bottom'].set_color(self.COLORS['border'])
             
+            self.ax2.set_xlim(0, 90)
+            self.ax2.set_ylim(1.0, 2.0)
             self.ax2.set_title("Permeability (μ) vs Angle",
                              color=self.COLORS['text_dark'],
                              fontsize=14, fontweight='bold', pad=15)
-            self.ax2.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], fontsize=11)
-            self.ax2.set_ylabel("Permeability (μ)", color=self.COLORS['text_dark'], fontsize=11)
+            self.ax2.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
+            self.ax2.set_ylabel("Permeability (μ)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
             self.ax2.grid(True, alpha=0.3, color=self.COLORS['border'], linestyle='--')
+            self.ax2.tick_params(colors=self.COLORS['text_dark'], labelsize=9)
+            self.ax2.spines['top'].set_visible(False)
+            self.ax2.spines['right'].set_visible(False)
+            self.ax2.spines['left'].set_color(self.COLORS['border'])
+            self.ax2.spines['bottom'].set_color(self.COLORS['border'])
         else:
             # Extract data
             angles = [m.angle for m in measurements]
@@ -516,13 +663,22 @@ class SPAMGui(tk.Tk):
             self.ax1.clear()
             self.ax1.plot(angles, permittivity, color=self.COLORS['secondary'], 
                          linewidth=2.5, label='ε')
+            # Set axis limits based on data with some padding
+            if angles:
+                self.ax1.set_xlim(max(0, min(angles) - 5), min(90, max(angles) + 5))
+                self.ax1.set_ylim(max(1.0, min(permittivity) - 0.2), max(permittivity) + 0.2)
+            else:
+                self.ax1.set_xlim(0, 90)
+                self.ax1.set_ylim(1.5, 2.5)
             self.ax1.set_title("Permittivity (ε) vs Angle", 
                              color=self.COLORS['text_dark'],
                              fontsize=14, fontweight='bold', pad=15)
-            self.ax1.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], fontsize=11)
-            self.ax1.set_ylabel("Permittivity (ε)", color=self.COLORS['text_dark'], fontsize=11)
+            self.ax1.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
+            self.ax1.set_ylabel("Permittivity (ε)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
             self.ax1.grid(True, alpha=0.3, color=self.COLORS['border'], linestyle='--')
-            self.ax1.tick_params(colors=self.COLORS['text_dark'])
+            self.ax1.tick_params(colors=self.COLORS['text_dark'], labelsize=9)
             self.ax1.spines['top'].set_visible(False)
             self.ax1.spines['right'].set_visible(False)
             self.ax1.spines['left'].set_color(self.COLORS['border'])
@@ -532,13 +688,22 @@ class SPAMGui(tk.Tk):
             self.ax2.clear()
             self.ax2.plot(angles, permeability, color=self.COLORS['accent'], 
                          linewidth=2.5, label='μ')
+            # Set axis limits based on data with some padding
+            if angles:
+                self.ax2.set_xlim(max(0, min(angles) - 5), min(90, max(angles) + 5))
+                self.ax2.set_ylim(max(0.5, min(permeability) - 0.2), max(permeability) + 0.2)
+            else:
+                self.ax2.set_xlim(0, 90)
+                self.ax2.set_ylim(1.0, 2.0)
             self.ax2.set_title("Permeability (μ) vs Angle",
                              color=self.COLORS['text_dark'],
                              fontsize=14, fontweight='bold', pad=15)
-            self.ax2.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], fontsize=11)
-            self.ax2.set_ylabel("Permeability (μ)", color=self.COLORS['text_dark'], fontsize=11)
+            self.ax2.set_xlabel("Angle (degrees)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
+            self.ax2.set_ylabel("Permeability (μ)", color=self.COLORS['text_dark'], 
+                              fontsize=11, fontweight='medium')
             self.ax2.grid(True, alpha=0.3, color=self.COLORS['border'], linestyle='--')
-            self.ax2.tick_params(colors=self.COLORS['text_dark'])
+            self.ax2.tick_params(colors=self.COLORS['text_dark'], labelsize=9)
             self.ax2.spines['top'].set_visible(False)
             self.ax2.spines['right'].set_visible(False)
             self.ax2.spines['left'].set_color(self.COLORS['border'])
@@ -548,6 +713,9 @@ class SPAMGui(tk.Tk):
         self.fig2.tight_layout(pad=2.0)
         self.canvas1.draw()
         self.canvas2.draw()
+        # Update scroll region after drawing
+        if hasattr(self, 'graphs_canvas'):
+            self.graphs_canvas.configure(scrollregion=self.graphs_canvas.bbox("all"))
     
     def _update_display(self):
         """Periodically update the display with latest data."""
@@ -603,7 +771,7 @@ class SPAMGui(tk.Tk):
             permeability = 1.5 + 0.08 * np.cos(self.current_angle * np.pi / 90) + np.random.normal(0, 0.02)
             
             # Save to database
-            self._create_measurement(self.current_angle, permittivity, permeability)
+            measurement = self._create_measurement(self.current_angle, permittivity, permeability)
             
             # Update current values
             self.current_permittivity = permittivity
@@ -612,14 +780,20 @@ class SPAMGui(tk.Tk):
             # Increment angle
             self.current_angle += angle_step
             
+            # Log progress every 10 degrees
+            if int(self.current_angle) % 10 == 0:
+                self.after(0, lambda: self._log_debug(f"Measurement progress: {self.current_angle:.1f}° / 90°", "INFO"))
+            
             # Wait before next measurement (adjust based on hardware response time)
             time.sleep(0.5)
         
         # Measurement complete or stopped
         self.is_measuring = False
         if self.current_angle > max_angle:
+            self.after(0, lambda: self._log_debug("Measurement completed successfully (0-90°)", "SUCCESS"))
             self.after(0, lambda: self._update_status("Measurement completed (0-90°)", "success"))
         else:
+            self.after(0, lambda: self._log_debug(f"Measurement stopped at {self.current_angle:.1f}°", "INFO"))
             self.after(0, lambda: self._update_status(f"Measurement stopped at {self.current_angle:.1f}°", "info"))
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
@@ -646,14 +820,17 @@ class SPAMGui(tk.Tk):
         """Perform calibration."""
         self.status_var.set("Calibrating...")
         self._update_status("Calibration in progress...", "warning")
+        self._log_debug("Calibration started", "INFO")
         
         # Create calibration record
         calibration = self._create_calibration()
         
         if calibration:
+            self._log_debug(f"Calibration completed successfully (ID: {calibration.id})", "SUCCESS")
             self.after(1500, lambda: self._update_status("Calibration completed successfully", "success"))
             self.after(1500, lambda: self.status_var.set("Ready"))
         else:
+            self._log_debug("Calibration failed", "ERROR")
             self.after(0, lambda: self._update_status("Calibration failed", "error"))
             self.after(0, lambda: self.status_var.set("Error"))
 
@@ -680,10 +857,12 @@ class SPAMGui(tk.Tk):
         self.status_var.set("Measuring...")
         self._update_status("Measurement started - sweeping 0° to 90°", "info")
         self._update_button_states()
+        self._log_debug("Measurement session started - sweeping 0° to 90°", "INFO")
         
         # Start measurement thread
         self.measurement_thread = threading.Thread(target=self._measurement_worker, daemon=True)
         self.measurement_thread.start()
+        self._log_debug("Measurement thread started", "INFO")
     
     def _on_stop_measurement(self) -> None:
         """Stop the current measurement session."""
@@ -695,6 +874,7 @@ class SPAMGui(tk.Tk):
         self.status_var.set("Stopping...")
         self._update_status("Stopping measurement...", "warning")
         self._update_button_states()
+        self._log_debug(f"Measurement stopped at angle {self.current_angle:.2f}°", "INFO")
         
         # Wait a moment for thread to finish current measurement
         self.after(500, lambda: self.status_var.set("Ready"))
@@ -812,6 +992,8 @@ Latest Measurement:
         if not file_path:
             return
         
+        self._log_debug(f"Exporting {len(measurements)} measurements to {file_path}", "INFO")
+        
         try:
             if file_path.endswith('.csv'):
                 # Export as CSV
@@ -842,9 +1024,12 @@ Latest Measurement:
                     json.dump(data, f, indent=2)
             
             self.status_var.set("Exporting...")
+            self._log_debug(f"Export completed successfully: {len(measurements)} records", "SUCCESS")
             self._update_status(f"Data exported successfully to {os.path.basename(file_path)}", "success")
             self.after(2000, lambda: self.status_var.set("Ready"))
         except Exception as e:
+            error_msg = f"Export failed: {str(e)}"
+            self._log_debug(error_msg, "ERROR")
             messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
             self._update_status("Export failed", "error")
 
@@ -854,6 +1039,20 @@ Latest Measurement:
         self._update_status("Opening settings...", "info")
         # Settings dialog can be implemented here
 
+    def _toggle_fullscreen(self) -> None:
+        """Toggle fullscreen mode."""
+        self.is_fullscreen = not self.is_fullscreen
+        self.attributes('-fullscreen', self.is_fullscreen)
+        if self.is_fullscreen:
+            self._update_status("Fullscreen mode - Press F11 or Esc to exit", "info")
+        else:
+            self._update_status("Windowed mode", "info")
+    
+    def _exit_fullscreen(self) -> None:
+        """Exit fullscreen mode."""
+        if self.is_fullscreen:
+            self._toggle_fullscreen()
+    
     def _on_help(self) -> None:
         """Show help/about dialog."""
         about_text = """SPAM - Scanner for Polarized Anisotropic Materials
@@ -867,11 +1066,37 @@ Features:
 - Data storage and management
 - Calibration functionality
 - Data export (JSON/CSV)
+- Fullscreen mode (F11)
+
+Keyboard Shortcuts:
+- F11: Toggle fullscreen
+- Ctrl+D: Debug Console
+- Esc: Exit fullscreen
 
 For use on Raspberry Pi and other local systems."""
         messagebox.showinfo("About SPAM", about_text)
         self.status_var.set("Help")
         self._update_status("Help requested", "info")
+    
+    def _on_debug_console(self) -> None:
+        """Open debug/advanced console window."""
+        if self.debug_window is None or not self.debug_window.winfo_exists():
+            self.debug_window = DebugConsole(self)
+        else:
+            self.debug_window.lift()
+            self.debug_window.focus()
+    
+    def _log_debug(self, message: str, level: str = "INFO") -> None:
+        """Add a message to the debug log."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}"
+        self.debug_log.append(log_entry)
+        # Keep only last 1000 entries
+        if len(self.debug_log) > 1000:
+            self.debug_log = self.debug_log[-1000:]
+        # Update debug window if open
+        if self.debug_window and self.debug_window.winfo_exists():
+            self.debug_window.update_console_log()
     
     def _on_close(self):
         """Handle window close event."""
@@ -883,6 +1108,403 @@ For use on Raspberry Pi and other local systems."""
             self.db.close()
         
         # Destroy window
+        self.destroy()
+
+
+class DebugConsole(tk.Toplevel):
+    """Advanced debug console window for system diagnostics."""
+    
+    def __init__(self, parent: SPAMGui):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("SPAM - Debug Console")
+        self.geometry("900x700")
+        self.configure(bg=parent.COLORS['bg_main'])
+        
+        # Make it a modal-like window (stays on top)
+        self.transient(parent)
+        self.grab_set()
+        
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create tabs
+        self._create_system_info_tab()
+        self._create_database_tab()
+        self._create_measurement_log_tab()
+        self._create_console_tab()
+        self._create_config_tab()
+        
+        # Close button
+        btn_frame = tk.Frame(self, bg=parent.COLORS['bg_main'])
+        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        close_btn = tk.Button(btn_frame, text="Close", command=self.destroy,
+                            bg=parent.COLORS['secondary'],
+                            fg=parent.COLORS['text_light'],
+                            font=("Segoe UI", 10, "bold"),
+                            relief=tk.FLAT, cursor="hand2",
+                            padx=20, pady=5)
+        close_btn.pack(side=tk.RIGHT)
+        
+        refresh_btn = tk.Button(btn_frame, text="Refresh All", command=self._refresh_all,
+                              bg=parent.COLORS['accent'],
+                              fg=parent.COLORS['text_light'],
+                              font=("Segoe UI", 10, "bold"),
+                              relief=tk.FLAT, cursor="hand2",
+                              padx=20, pady=5)
+        refresh_btn.pack(side=tk.RIGHT, padx=(0, 10))
+        
+        # Initial refresh
+        self._refresh_all()
+        
+        # Set up periodic refresh for measurement log
+        self._schedule_refresh()
+        
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+    
+    def _schedule_refresh(self):
+        """Schedule periodic refresh of measurement log."""
+        if self.winfo_exists():
+            # Refresh measurement log every 2 seconds
+            self._update_measurement_log()
+            self.after(2000, self._schedule_refresh)
+    
+    def _create_system_info_tab(self):
+        """Create system information tab."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="System Info")
+        
+        # Scrollable text widget
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(frame, 
+                            bg=self.parent.COLORS['bg_panel'],
+                            fg=self.parent.COLORS['text_dark'],
+                            font=("Consolas", 9),
+                            yscrollcommand=scrollbar.set,
+                            wrap=tk.WORD,
+                            padx=10, pady=10)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        self.system_info_text = text_widget
+    
+    def _create_database_tab(self):
+        """Create database status tab."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="Database")
+        
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(frame,
+                            bg=self.parent.COLORS['bg_panel'],
+                            fg=self.parent.COLORS['text_dark'],
+                            font=("Consolas", 9),
+                            yscrollcommand=scrollbar.set,
+                            wrap=tk.WORD,
+                            padx=10, pady=10)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        self.database_text = text_widget
+    
+    def _create_measurement_log_tab(self):
+        """Create measurement log tab."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="Measurement Log")
+        
+        # Treeview for structured display
+        tree_frame = tk.Frame(frame, bg=self.parent.COLORS['bg_main'])
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar_y = tk.Scrollbar(tree_frame)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        scrollbar_x = tk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        tree = ttk.Treeview(tree_frame,
+                          columns=("ID", "Angle", "Permittivity", "Permeability", "Timestamp"),
+                          show="headings",
+                          yscrollcommand=scrollbar_y.set,
+                          xscrollcommand=scrollbar_x.set)
+        
+        tree.heading("ID", text="ID")
+        tree.heading("Angle", text="Angle (°)")
+        tree.heading("Permittivity", text="Permittivity (ε)")
+        tree.heading("Permeability", text="Permeability (μ)")
+        tree.heading("Timestamp", text="Timestamp")
+        
+        tree.column("ID", width=50)
+        tree.column("Angle", width=80)
+        tree.column("Permittivity", width=120)
+        tree.column("Permeability", width=120)
+        tree.column("Timestamp", width=200)
+        
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_y.config(command=tree.yview)
+        scrollbar_x.config(command=tree.xview)
+        
+        self.measurement_tree = tree
+    
+    def _create_console_tab(self):
+        """Create console output tab."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="Console")
+        
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(frame,
+                            bg="#1E1E1E",  # Dark background for console
+                            fg="#00FF00",  # Green text
+                            font=("Consolas", 9),
+                            yscrollcommand=scrollbar.set,
+                            wrap=tk.WORD,
+                            padx=10, pady=10)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        self.console_text = text_widget
+    
+    def _create_config_tab(self):
+        """Create configuration tab."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="Configuration")
+        
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(frame,
+                            bg=self.parent.COLORS['bg_panel'],
+                            fg=self.parent.COLORS['text_dark'],
+                            font=("Consolas", 9),
+                            yscrollcommand=scrollbar.set,
+                            wrap=tk.WORD,
+                            padx=10, pady=10)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        self.config_text = text_widget
+    
+    def _refresh_all(self):
+        """Refresh all tabs with current data."""
+        self._update_system_info()
+        self._update_database_info()
+        self._update_measurement_log()
+        self.update_console_log()
+        self._update_config()
+    
+    def _update_system_info(self):
+        """Update system information tab."""
+        import platform
+        import sqlalchemy
+        import matplotlib
+        import numpy
+        
+        info = []
+        info.append("=" * 70)
+        info.append("SYSTEM INFORMATION")
+        info.append("=" * 70)
+        info.append("")
+        
+        info.append("Python Version:")
+        info.append(f"  {sys.version}")
+        info.append("")
+        
+        info.append("Platform:")
+        info.append(f"  System: {platform.system()}")
+        info.append(f"  Release: {platform.release()}")
+        info.append(f"  Version: {platform.version()}")
+        info.append(f"  Machine: {platform.machine()}")
+        info.append(f"  Processor: {platform.processor()}")
+        info.append("")
+        
+        info.append("Python Path:")
+        for path in sys.path:
+            info.append(f"  {path}")
+        info.append("")
+        
+        info.append("=" * 70)
+        info.append("DEPENDENCIES")
+        info.append("=" * 70)
+        info.append("")
+        info.append(f"SQLAlchemy: {sqlalchemy.__version__}")
+        info.append(f"Matplotlib: {matplotlib.__version__}")
+        info.append(f"NumPy: {numpy.__version__}")
+        info.append("")
+        
+        info.append("=" * 70)
+        info.append("APPLICATION STATE")
+        info.append("=" * 70)
+        info.append("")
+        info.append(f"Measurement Active: {self.parent.is_measuring}")
+        info.append(f"Current Angle: {self.parent.current_angle:.2f}°")
+        info.append(f"Current Permittivity: {self.parent.current_permittivity:.4f}")
+        info.append(f"Current Permeability: {self.parent.current_permeability:.4f}")
+        info.append(f"Measurement Thread: {'Running' if self.parent.measurement_thread and self.parent.measurement_thread.is_alive() else 'Not Running'}")
+        info.append("")
+        
+        self.system_info_text.config(state=tk.NORMAL)
+        self.system_info_text.delete(1.0, tk.END)
+        self.system_info_text.insert(1.0, "\n".join(info))
+        self.system_info_text.config(state=tk.DISABLED)
+    
+    def _update_database_info(self):
+        """Update database information tab."""
+        from database import engine, SQLALCHEMY_DATABASE_URL
+        
+        info = []
+        info.append("=" * 70)
+        info.append("DATABASE INFORMATION")
+        info.append("=" * 70)
+        info.append("")
+        
+        info.append("Database URL:")
+        info.append(f"  {SQLALCHEMY_DATABASE_URL}")
+        info.append("")
+        
+        # Database file location
+        if "sqlite" in SQLALCHEMY_DATABASE_URL.lower():
+            db_path = SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "")
+            if not os.path.isabs(db_path):
+                # Get the directory of the main script
+                main_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+                db_path = os.path.join(main_dir, db_path)
+            info.append("Database File:")
+            info.append(f"  {os.path.abspath(db_path)}")
+            if os.path.exists(db_path):
+                size = os.path.getsize(db_path)
+                info.append(f"  Size: {size:,} bytes ({size/1024:.2f} KB)")
+            else:
+                info.append("  Status: File does not exist yet")
+            info.append("")
+        
+        # Connection status
+        try:
+            with engine.connect() as conn:
+                info.append("Connection Status: ✓ Connected")
+        except Exception as e:
+            info.append(f"Connection Status: ✗ Error - {str(e)}")
+        info.append("")
+        
+        # Table information
+        info.append("=" * 70)
+        info.append("TABLE STATISTICS")
+        info.append("=" * 70)
+        info.append("")
+        
+        try:
+            # Measurement count
+            measurement_count = self.parent.db.query(Measurement).count()
+            info.append(f"Measurements Table:")
+            info.append(f"  Total Records: {measurement_count}")
+            
+            if measurement_count > 0:
+                latest = self.parent.db.query(Measurement).order_by(Measurement.timestamp.desc()).first()
+                oldest = self.parent.db.query(Measurement).order_by(Measurement.timestamp.asc()).first()
+                info.append(f"  Latest: {latest.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                info.append(f"  Oldest: {oldest.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+            info.append("")
+            
+            # Calibration count
+            calibration_count = self.parent.db.query(Calibration).count()
+            info.append(f"Calibrations Table:")
+            info.append(f"  Total Records: {calibration_count}")
+            
+            if calibration_count > 0:
+                latest_cal = self.parent.db.query(Calibration).order_by(Calibration.timestamp.desc()).first()
+                info.append(f"  Latest: {latest_cal.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+            info.append("")
+            
+        except Exception as e:
+            info.append(f"Error querying database: {str(e)}")
+            info.append("")
+        
+        self.database_text.config(state=tk.NORMAL)
+        self.database_text.delete(1.0, tk.END)
+        self.database_text.insert(1.0, "\n".join(info))
+        self.database_text.config(state=tk.DISABLED)
+    
+    def _update_measurement_log(self):
+        """Update measurement log tab."""
+        # Clear existing items
+        for item in self.measurement_tree.get_children():
+            self.measurement_tree.delete(item)
+        
+        try:
+            # Get last 100 measurements
+            measurements = self.parent.db.query(Measurement).order_by(
+                Measurement.timestamp.desc()
+            ).limit(100).all()
+            
+            for m in measurements:
+                self.measurement_tree.insert("", tk.END, values=(
+                    m.id,
+                    f"{m.angle:.2f}",
+                    f"{m.permittivity:.4f}",
+                    f"{m.permeability:.4f}",
+                    m.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                ))
+        except Exception as e:
+            self.measurement_tree.insert("", tk.END, values=(
+                "ERROR", "", "", "", str(e)
+            ))
+    
+    def update_console_log(self):
+        """Update console output tab."""
+        self.console_text.config(state=tk.NORMAL)
+        self.console_text.delete(1.0, tk.END)
+        if self.parent.debug_log:
+            self.console_text.insert(1.0, "\n".join(self.parent.debug_log[-100:]))  # Last 100 entries
+        else:
+            self.console_text.insert(1.0, "No log entries yet.")
+        # Auto-scroll to bottom
+        self.console_text.see(tk.END)
+        self.console_text.config(state=tk.DISABLED)
+    
+    def _update_config(self):
+        """Update configuration tab."""
+        info = []
+        info.append("=" * 70)
+        info.append("CURRENT CONFIGURATION")
+        info.append("=" * 70)
+        info.append("")
+        
+        info.append("Measurement Settings:")
+        info.append(f"  Angle Step: 5.0°")
+        info.append(f"  Max Angle: 90.0°")
+        info.append(f"  Measurement Interval: 0.5 seconds")
+        info.append("")
+        
+        info.append("Database Settings:")
+        from database import SQLALCHEMY_DATABASE_URL
+        info.append(f"  Database URL: {SQLALCHEMY_DATABASE_URL}")
+        info.append("")
+        
+        info.append("GUI Settings:")
+        info.append(f"  Window Size: {self.parent.winfo_width()}x{self.parent.winfo_height()}")
+        info.append(f"  Update Interval: 1 second")
+        info.append("")
+        
+        info.append("Color Scheme:")
+        for key, value in self.parent.COLORS.items():
+            info.append(f"  {key}: {value}")
+        info.append("")
+        
+        self.config_text.config(state=tk.NORMAL)
+        self.config_text.delete(1.0, tk.END)
+        self.config_text.insert(1.0, "\n".join(info))
+        self.config_text.config(state=tk.DISABLED)
+    
+    def _on_close(self):
+        """Handle window close."""
+        self.grab_release()
         self.destroy()
 
 
