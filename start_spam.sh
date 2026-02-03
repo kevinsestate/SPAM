@@ -24,10 +24,16 @@ fi
 echo "Activating virtual environment..."
 source venv/bin/activate
 
-# Install/update dependencies
-echo "Installing dependencies..."
-pip install --upgrade pip --quiet
-pip install -r requirements.txt --quiet
+# Check if dependencies are already installed (faster startup)
+echo "Checking dependencies..."
+python3 -c "import matplotlib, numpy, sqlalchemy" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Installing dependencies..."
+    pip install --upgrade pip --quiet
+    pip install -r requirements.txt --quiet
+else
+    echo "Dependencies already installed, skipping..."
+fi
 
 # Run the application
 echo "Launching SPAM GUI..."
