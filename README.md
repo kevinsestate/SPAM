@@ -160,7 +160,7 @@ SPAM/
 
 1. **Configure Connection Settings** (if using hardware):
    - Go to **Settings → Connection Setup**
-   - Enter VNA IP address and port (if using VNA)
+   - Configure signal input settings (ADC channels, sampling rate, etc.)
    - Configure serial port settings (if using serial connection)
    - Click **"Save"** to store settings
 
@@ -249,7 +249,7 @@ Before taking measurements, you must calibrate the system:
 
 **Right Panel:**
 - Current measurement values
-- S-Parameter display
+- S-Parameter display (derived from signal measurements)
 - System status
 
 **Status Bar (Bottom):**
@@ -267,42 +267,89 @@ Before taking measurements, you must calibrate the system:
 
 The current implementation includes simulated measurement data for demonstration. To integrate with actual hardware:
 
-### VNA Integration
+### System Architecture
+
+The SPAM system uses a custom RF measurement setup with the following components:
+
+**RF Chain:**
+- **Gunn Diode Oscillator**: Generates the RF signal
+- **Amplifier**: Boosts the RF signal power
+- **Splitter**: Divides signal into two paths:
+  - **TX Path**: Transmit signal to TX Horn Antenna (radiates RF into free space)
+  - **LO Path**: Local Oscillator signal to Mixer
+- **RX Horn Antennas**: Two receive antennas (RXp and RXT) receive reflected/transmitted RF
+- **Switch**: Selects between the two RX antennas
+- **Mixer**: Downconverts RF signal to baseband, producing:
+  - **IF-I** (In-phase component)
+  - **IF-Q** (Quadrature component)
+- **ADCs**: Convert analog IF-I and IF-Q signals to digital data
+
+**Control System:**
+- **Raspberry Pi**: Central processing unit
+  - Reads I/Q data from ADCs via **I2C**
+  - Controls motors via **Microcontroller** (I2C)
+  - Receives encoder feedback for angle position
+- **Microcontroller**: Motor controller (I2C interface)
+  - Controls motor rotation
+  - Reads encoder position feedback
+
+### I2C/ADC Integration
+
+The system reads two signals (IF-I and IF-Q) from ADCs connected via I2C to determine permittivity (ε) and permeability (μ).
 
 1. **Configure Connection:**
    - Go to **Settings → Connection Setup**
-   - Enter your VNA IP address and port (typically port 5025 for SCPI)
+   - Configure I2C bus number (typically 1 on Raspberry Pi)
+   - Set ADC I2C address (default: 0x48)
+   - Configure IF-I and IF-Q ADC channels
+   - Set sampling rate
+   - Configure microcontroller I2C address for motor control
    - Save settings
 
 2. **Modify Measurement Worker:**
-   - Locate the `_measurement_worker` method in `GUI.py` (around line 1025)
-   - Replace the simulated S-parameter generation with actual VNA readings:
+   - Locate the `_measurement_worker` method in `GUI.py` (around line 760)
+   - Replace the simulated data generation with actual I/Q readings:
    ```python
-   # Example VNA integration
-   import pyvisa
-   
    def _measurement_worker(self):
-       rm = pyvisa.ResourceManager()
-       vna = rm.open_resource(f"TCPIP::{self.connection_settings['vna_address']}::{self.connection_settings['vna_port']}::SOCKET")
+       """Read IF-I and IF-Q from ADCs and convert to permittivity/permeability."""
+       import smbus
+       
+       # Initialize I2C bus
+       bus = smbus.SMBus(int(self.connection_settings['i2c_bus']))
+       adc_addr = int(self.connection_settings['adc_address'], 16)
        
        while self.is_measuring:
-           # Read S-parameters from VNA
-           s11 = vna.query("S11")
-           s12 = vna.query("S12")
-           s21 = vna.query("S21")
-           s22 = vna.query("S22")
+           # Read IF-I and IF-Q from ADCs via I2C
+           if_i = read_adc_channel(bus, adc_addr, 
+                                   int(self.connection_settings['if_i_channel']))
+           if_q = read_adc_channel(bus, adc_addr, 
+                                   int(self.connection_settings['if_q_channel']))
            
-           # Convert S-parameters to material properties
-           permittivity, permeability = convert_s_to_material_props(s11, s12, s21, s22)
+           # Process I/Q signals to extract material properties
+           # This conversion depends on your specific RF measurement setup
+           permittivity, permeability = process_iq_signals(if_i, if_q, self.current_angle)
+           
+           # Optionally calculate S-parameters from I/Q for display
+           s11, s12, s21, s22 = iq_to_s_parameters(if_i, if_q)
            
            # Save to database
            self._create_measurement(self.current_angle, permittivity, permeability)
+           
+           # Control motor to next angle (via microcontroller I2C)
+           set_motor_angle(bus, int(self.connection_settings['microcontroller_address'], 16), 
+                          self.current_angle + angle_step)
+           
+           # Wait for motor to reach position and stabilize
+           time.sleep(self.measurement_interval)
    ```
 
-3. **S-Parameter to Material Properties:**
-   - Implement conversion formulas based on your measurement setup
-   - Consider calibration corrections and non-idealities
-   - The GUI displays S-parameters in real-time for verification
+3. **I/Q to Material Properties Conversion:**
+   - Implement conversion algorithms based on your RF measurement setup
+   - The I/Q components represent the complex baseband signal
+   - Process I/Q to extract magnitude and phase information
+   - Apply calibration corrections and non-ideality compensation
+   - Convert to permittivity and permeability using your measurement model
+   - S-parameters can be derived from I/Q for display purposes
 
 ### Serial Device Integration
 
