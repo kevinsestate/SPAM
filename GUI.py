@@ -89,7 +89,7 @@ class SPAMGui(tk.Tk):
         self.current_permittivity = 0.00
         self.current_permeability = 0.00
         
-        # S-parameters (mock data for display)
+        # S-parameters (will be populated from actual measurements)
         self.s11_mag = 0.0
         self.s11_phase = 0.0
         self.s12_mag = 0.0
@@ -118,12 +118,30 @@ class SPAMGui(tk.Tk):
             'if_i_channel': '0',  # ADC channel for IF-I (In-phase)
             'if_q_channel': '1',  # ADC channel for IF-Q (Quadrature)
             'sampling_rate': '1000',  # ADC sampling rate (Hz)
-            'microcontroller_address': '0x50',  # Microcontroller I2C address for motor control
+            'microcontroller_address': '0x55',  # Microcontroller I2C address for motor control
+            'isr_pin': '17',  # GPIO pin for interrupt (ISR)
             'serial_port': 'COM1',
             'baud_rate': '9600',
             'timeout': '5.0',
             'connection_type': 'I2C'
         }
+        
+        # Motor control state
+        self.motor_control_enabled = False
+        self.motor_bus = None
+        self.motor_gpio = None
+        self.motor_movement_status = True  # True = ready, False = moving
+        self.motor_collision_detected = False
+        self.motor_num = 0  # Default motor number
+        self.motor_command = 0  # Default command
+        
+        # Motor status variables for display
+        self.motor_status_var = tk.StringVar(value="Not Initialized")
+        self.motor_position_var = tk.StringVar(value="0.0°")
+        
+        # Initialize motor control if on Raspberry Pi (deferred to avoid blocking startup)
+        if platform.system() == 'Linux':
+            self.after(200, self._initialize_motor_control)
 
         # Build top‑level components first (show UI quickly)
         self._create_menu()
@@ -157,6 +175,162 @@ class SPAMGui(tk.Tk):
         
         # Start periodic updates
         self._update_display()
+    
+    def _initialize_motor_control(self):
+        """Initialize motor control hardware (I2C and GPIO) for Raspberry Pi."""
+        if platform.system() != 'Linux':
+            self.motor_status_var.set("Not Available (Windows)")
+            self._log_debug("Motor control not available on Windows - running in simulation mode", "INFO")
+            return
+        
+        try:
+            from smbus import SMBus
+            import RPi.GPIO as GPIO
+            
+            # Get settings
+            i2c_bus_num = int(self.connection_settings.get('i2c_bus', '1'))
+            mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+            isr_pin = int(self.connection_settings.get('isr_pin', '17'))
+            
+            self.motor_status_var.set("Initializing...")
+            self._log_debug(f"Initializing motor control: I2C Bus={i2c_bus_num}, Address=0x{mcu_address:02X}, ISR Pin={isr_pin}", "INFO")
+            
+            # Initialize I2C bus
+            self.motor_bus = SMBus(i2c_bus_num)
+            self._log_debug(f"I2C bus {i2c_bus_num} opened successfully", "INFO")
+            
+            # Verify microcontroller is connected by trying to read status register
+            try:
+                status = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                self._log_debug(f"Microcontroller detected at address 0x{mcu_address:02X}, status=0x{status:02X}", "SUCCESS")
+            except Exception as e:
+                self._log_debug(f"Warning: Could not read from microcontroller at 0x{mcu_address:02X}: {e}", "WARNING")
+                self._log_debug("Motor control will still be enabled, but verify I2C connection", "WARNING")
+            
+            # Initialize GPIO
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(isr_pin, GPIO.IN)
+            self.motor_gpio = GPIO
+            self._log_debug(f"GPIO pin {isr_pin} configured for interrupt detection", "INFO")
+            
+            # Set up interrupt handler
+            def handle_alert(channel):
+                """Handle GPIO interrupt for motor status updates."""
+                try:
+                    status = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    if status & 0x01:
+                        self.motor_collision_detected = True
+                        self.after(0, lambda: self._log_debug("COLLISION DETECTED - Motor movement stopped", "ERROR"))
+                        self.after(0, lambda: self.motor_status_var.set("COLLISION!"))
+                        self.after(0, lambda: self._update_status("Motor collision detected!", "error"))
+                        # Stop measurement if collision occurs
+                        if self.is_measuring:
+                            self.after(0, self._on_stop_measurement)
+                    if status & 0x02:
+                        self.motor_movement_status = True
+                        self.after(0, lambda: self._log_debug("POSITION REACHED - Motor movement complete", "INFO"))
+                        self.after(0, lambda: self.motor_status_var.set("Ready"))
+                except Exception as e:
+                    self.after(0, lambda: self._log_debug(f"Error reading motor status: {e}", "ERROR"))
+            
+            GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
+            self._log_debug(f"GPIO interrupt handler registered on pin {isr_pin}", "INFO")
+            
+            # Mark as initialized and ready
+            self.motor_control_enabled = True
+            self.motor_status_var.set("Ready")
+            self._log_debug(f"Motor control initialized successfully: I2C Bus={i2c_bus_num}, Address=0x{mcu_address:02X}, ISR Pin={isr_pin}", "SUCCESS")
+            self._update_status("Motor control initialized and ready", "success")
+            
+        except ImportError as e:
+            self.motor_status_var.set("Libraries Not Available")
+            self._log_debug(f"Motor control libraries not available: {e}", "ERROR")
+            self._log_debug("Install required libraries: pip install smbus2 RPi.GPIO", "ERROR")
+            self.motor_control_enabled = False
+        except Exception as e:
+            self.motor_status_var.set("Initialization Failed")
+            self._log_debug(f"Motor control initialization failed: {e}", "ERROR")
+            self._log_debug("Check I2C connection and GPIO permissions", "ERROR")
+            self.motor_control_enabled = False
+    
+    def _send_motor_command(self, motor_num: int, position: float, command: int = 0) -> bool:
+        """
+        Send motor position command via I2C.
+        
+        Args:
+            motor_num: Motor number to control
+            position: Target position in degrees
+            command: Command byte (default 0)
+        
+        Returns:
+            True if command sent successfully, False otherwise
+        """
+        if not self.motor_control_enabled or self.motor_bus is None:
+            # Simulate motor movement in non-hardware mode
+            self.motor_movement_status = False
+            self.motor_status_var.set("Moving (Simulated)")
+            self.after(0, lambda: self._log_debug(f"Motor {motor_num}: Simulated move to {position:.2f}°", "INFO"))
+            # Simulate movement completion after a delay
+            self.after(int(self.measurement_interval * 1000), lambda: self._simulate_motor_complete())
+            return True
+        
+        try:
+            import struct
+            
+            mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+            
+            # Pack position as float (little-endian)
+            packed_val = struct.pack('<f', position)
+            
+            # Create message: [command, motorNum, position_bytes...]
+            message = list(packed_val)
+            message.insert(0, command)
+            message.insert(1, motor_num)
+            
+            # Send command via I2C
+            self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
+            
+            self.motor_movement_status = False
+            self.motor_status_var.set("Moving...")
+            self.motor_num = motor_num
+            self.motor_command = command
+            self.motor_position_var.set(f"{position:.1f}°")
+            
+            self._log_debug(f"Motor {motor_num}: Command sent to position {position:.2f}°", "INFO")
+            return True
+            
+        except Exception as e:
+            self._log_debug(f"Error sending motor command: {e}", "ERROR")
+            self.motor_status_var.set("Error")
+            return False
+    
+    def _simulate_motor_complete(self):
+        """Simulate motor movement completion (for non-hardware mode)."""
+        self.motor_movement_status = True
+        self.motor_status_var.set("Ready (Simulated)")
+    
+    def _wait_for_motor_position(self, timeout: float = 5.0) -> bool:
+        """
+        Wait for motor to reach target position.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+        
+        Returns:
+            True if position reached, False if timeout or collision
+        """
+        if not self.motor_control_enabled:
+            # In simulation mode, just wait a bit
+            time.sleep(0.1)
+            return True
+        
+        start_time = time.time()
+        while not self.motor_movement_status and (time.time() - start_time) < timeout:
+            if self.motor_collision_detected:
+                return False
+            time.sleep(0.05)  # Check every 50ms
+        
+        return self.motor_movement_status
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -356,6 +530,37 @@ class SPAMGui(tk.Tk):
                           font=("Segoe UI", 12, "bold"))
             val.pack(side=tk.RIGHT)
 
+        # Motor Control Status section
+        motor_header = tk.Label(info_frame, text="Motor Control",
+                               bg=self.COLORS['bg_main'], 
+                               fg=self.COLORS['text_dark'],
+                               font=("Segoe UI", 14, "bold"))
+        motor_header.pack(padx=0, pady=(12, 12), anchor="w")
+        
+        motor_items = [
+            ("Status", self.motor_status_var),
+            ("Position", self.motor_position_var)
+        ]
+        
+        for label_text, var in motor_items:
+            card = tk.Frame(info_frame, bg=self.COLORS['bg_panel'], 
+                           relief=tk.FLAT, bd=0)
+            card.pack(fill=tk.X, pady=4)
+            border_frame = tk.Frame(card, bg=self.COLORS['warning'], height=2)
+            border_frame.pack(fill=tk.X)
+            content = tk.Frame(card, bg=self.COLORS['bg_panel'])
+            content.pack(fill=tk.BOTH, padx=12, pady=8)
+            lbl = tk.Label(content, text=label_text, 
+                          bg=self.COLORS['bg_panel'],
+                          fg=self.COLORS['text_muted'], 
+                          font=("Segoe UI", 9))
+            lbl.pack(side=tk.LEFT)
+            val = tk.Label(content, textvariable=var, 
+                          bg=self.COLORS['bg_panel'],
+                          fg=self.COLORS['text_dark'], 
+                          font=("Segoe UI", 12, "bold"))
+            val.pack(side=tk.RIGHT)
+        
         # S-Parameters section - same style as above
         sparam_header = tk.Label(info_frame, text="S-Parameters",
                                  bg=self.COLORS['bg_main'], 
@@ -1012,20 +1217,18 @@ class SPAMGui(tk.Tk):
         self.s21_var.set(f"{self.s21_mag:.3f}∠{self.s21_phase:.1f}°")
         self.s22_var.set(f"{self.s22_mag:.3f}∠{self.s22_phase:.1f}°")
         
+        # Update motor position display
+        self.motor_position_var.set(f"{self.current_angle:.1f}°")
+        
         # Update control parameters
         self.freq_var.set(f"{self.frequency:.1f} GHz")
         self.power_var.set(f"{self.power_level:.1f} dBm")
         self.angle_step_var.set(f"{self.angle_step:.1f}°")
         self.interval_var.set(f"{self.measurement_interval:.2f} s")
         
-        # Update non-idealities (mock values - would come from sensors in real system)
-        if self.is_measuring:
-            # Simulate small variations during measurement
-            self.calibration_error = 0.5 + 0.2 * np.sin(time.time() * 0.1)
-            self.noise_level = -80.0 + 2.0 * np.sin(time.time() * 0.15)
-            self.temperature = 25.0 + 0.5 * np.sin(time.time() * 0.05)
-            self.humidity = 45.0 + 2.0 * np.cos(time.time() * 0.08)
-        else:
+        # Update non-idealities (would come from sensors in real system)
+        # TODO: Read actual sensor values
+        if not self.is_measuring:
             self.calibration_error = 0.0
             self.noise_level = 0.0
         
@@ -1041,79 +1244,43 @@ class SPAMGui(tk.Tk):
         """
         Background thread for continuous measurements.
         
-        This function calculates permittivity (ε) and permeability (μ) at different angles.
-        Currently uses simulated data, but ready for hardware integration.
-        
-        What it measures:
-        - Permittivity (ε): Electrical property - how much electric field is affected by material
-        - Permeability (μ): Magnetic property - how much magnetic field is affected by material
-        - Angle: Rotation angle of the material (0-90 degrees)
-        
-        The measurement sweeps through angles from 0° to 90° in steps (default 5°),
-        taking measurements at each angle to characterize anisotropic material properties.
+        Moves the motor through angles from 0° to 90° in steps.
+        Ready for hardware integration to read actual measurements at each angle.
         """
         angle_step = self.angle_step  # degrees per measurement
         max_angle = 90.0
         
         while self.is_measuring and self.current_angle <= max_angle:
-            # TODO: Replace this with actual hardware reading
+            # Move motor to current angle position
+            if self.motor_control_enabled or platform.system() == 'Linux':
+                # Send motor command to move to current angle
+                motor_success = self._send_motor_command(
+                    motor_num=self.motor_num,
+                    position=self.current_angle,
+                    command=self.motor_command
+                )
+                
+                if not motor_success:
+                    self.after(0, lambda: self._log_debug(f"Failed to send motor command for angle {self.current_angle:.2f}°", "ERROR"))
+                    # Continue anyway, but log the error
+                
+                # Wait for motor to reach position (with timeout)
+                if not self._wait_for_motor_position(timeout=5.0):
+                    if self.motor_collision_detected:
+                        self.after(0, lambda: self._log_debug("Measurement stopped due to motor collision", "ERROR"))
+                        self.is_measuring = False
+                        break
+                    else:
+                        self.after(0, lambda: self._log_debug(f"Motor timeout at angle {self.current_angle:.2f}° - continuing", "WARNING"))
+            
+            # TODO: Read actual measurements from hardware at this angle
             # Example hardware integration:
-            #   s_params = read_s_parameters_from_vna(self.current_angle)
-            #   permittivity, permeability = convert_s_to_material_props(s_params)
+            #   if_i, if_q = read_adc_channels()  # Read I/Q signals from ADC
+            #   permittivity, permeability = process_iq_signals(if_i, if_q, self.current_angle)
+            #   self._create_measurement(self.current_angle, permittivity, permeability)
             
-            # Simulate S-parameter measurement (replace with actual VNA reading)
-            # Generate realistic S-parameters based on material properties
-            angle_rad = np.radians(self.current_angle)
-            
-            # Simulate S-parameters with angle-dependent variation
-            # S11 and S22 (reflection coefficients)
-            s11_mag = 0.15 + 0.05 * np.sin(angle_rad) + np.random.normal(0, 0.01)
-            s11_phase = 180 * np.sin(angle_rad * 0.5) + np.random.normal(0, 2)
-            s22_mag = 0.12 + 0.04 * np.cos(angle_rad) + np.random.normal(0, 0.01)
-            s22_phase = -180 * np.cos(angle_rad * 0.5) + np.random.normal(0, 2)
-            
-            # S12 and S21 (transmission coefficients)
-            s12_mag = 0.85 - 0.1 * np.sin(angle_rad) + np.random.normal(0, 0.01)
-            s12_phase = -45 * np.sin(angle_rad) + np.random.normal(0, 2)
-            s21_mag = s12_mag + np.random.normal(0, 0.005)  # S21 ≈ S12 for reciprocal networks
-            s21_phase = s12_phase + np.random.normal(0, 1)
-            
-            # Store S-parameters
-            self.s11_mag = s11_mag
-            self.s11_phase = s11_phase
-            self.s12_mag = s12_mag
-            self.s12_phase = s12_phase
-            self.s21_mag = s21_mag
-            self.s21_phase = s21_phase
-            self.s22_mag = s22_mag
-            self.s22_phase = s22_phase
-            
-            # Convert S-parameters to material properties (simplified model)
-            # In real implementation, this would use the formulas shown in the GUI
-            # For mock data, generate permittivity/permeability from S-parameters
-            # Using simplified conversion: ε ≈ f(S11, S21), μ ≈ f(S22, S12)
-            permittivity = 2.0 + 0.1 * np.sin(angle_rad) + 0.5 * (s11_mag - 0.15) + np.random.normal(0, 0.02)
-            permeability = 1.5 + 0.08 * np.cos(angle_rad) + 0.3 * (s22_mag - 0.12) + np.random.normal(0, 0.02)
-            
-            # Apply non-ideality corrections (mock)
-            # Calibration error compensation
-            cal_correction = 1.0 - (self.calibration_error / 100.0)
-            permittivity *= cal_correction
-            permeability *= cal_correction
-            
-            # Temperature compensation (mock)
-            temp_coeff_eps = -0.001  # per °C
-            temp_coeff_mu = -0.0005  # per °C
-            temp_diff = self.temperature - 25.0
-            permittivity *= (1.0 + temp_coeff_eps * temp_diff)
-            permeability *= (1.0 + temp_coeff_mu * temp_diff)
-            
-            # Save to database
-            measurement = self._create_measurement(self.current_angle, permittivity, permeability)
-            
-            # Update current values
-            self.current_permittivity = permittivity
-            self.current_permeability = permeability
+            # Log position reached
+            self.after(0, lambda: self._log_debug(f"Motor reached position: {self.current_angle:.2f}°", "INFO"))
             
             # Increment angle
             self.current_angle += angle_step
@@ -1122,14 +1289,14 @@ class SPAMGui(tk.Tk):
             if int(self.current_angle) % 10 == 0:
                 self.after(0, lambda: self._log_debug(f"Measurement progress: {self.current_angle:.1f}° / 90°", "INFO"))
             
-            # Wait before next measurement (adjust based on hardware response time)
+            # Wait before next movement (adjust based on hardware response time)
             time.sleep(self.measurement_interval)
         
         # Measurement complete or stopped
         self.is_measuring = False
         if self.current_angle > max_angle:
-            self.after(0, lambda: self._log_debug("Measurement completed successfully (0-90°)", "SUCCESS"))
-            self.after(0, lambda: self._update_status("Measurement completed (0-90°)", "success"))
+            self.after(0, lambda: self._log_debug("Measurement sweep completed successfully (0-90°)", "SUCCESS"))
+            self.after(0, lambda: self._update_status("Measurement sweep completed (0-90°)", "success"))
         else:
             self.after(0, lambda: self._log_debug(f"Measurement stopped at {self.current_angle:.1f}°", "INFO"))
             self.after(0, lambda: self._update_status(f"Measurement stopped at {self.current_angle:.1f}°", "info"))
@@ -1646,6 +1813,17 @@ Latest Measurement:
                 font=("Segoe UI", 10),
                 width=20).grid(row=5, column=1, sticky="w", pady=5)
         
+        tk.Label(signal_frame, text="ISR Pin (GPIO):", 
+                bg=self.COLORS['bg_panel'],
+                fg=self.COLORS['text_dark'],
+                font=("Segoe UI", 10)).grid(row=6, column=0, sticky="w", pady=5, padx=(0, 10))
+        isr_pin_var = tk.StringVar(value=self.connection_settings.get('isr_pin', '17'))
+        tk.Entry(signal_frame, textvariable=isr_pin_var,
+                bg=self.COLORS['bg_panel'],
+                fg=self.COLORS['text_dark'],
+                font=("Segoe UI", 10),
+                width=20).grid(row=6, column=1, sticky="w", pady=5)
+        
         # Serial Connection Section
         serial_frame = tk.LabelFrame(content, text="Serial Connection",
                                      bg=self.COLORS['bg_panel'],
@@ -1702,6 +1880,7 @@ Latest Measurement:
                     'if_q_channel': if_q_channel_var.get(),
                     'sampling_rate': sampling_rate_var.get(),
                     'microcontroller_address': microcontroller_address_var.get(),
+                    'isr_pin': isr_pin_var.get(),
                     'serial_port': serial_port_var.get(),
                     'baud_rate': baud_rate_var.get(),
                     'timeout': timeout_var.get(),
@@ -1719,8 +1898,21 @@ Latest Measurement:
                     raise ValueError("Sampling rate must be a number")
                 if not baud_rate_var.get().isdigit():
                     raise ValueError("Baud rate must be a number")
+                if not isr_pin_var.get().isdigit():
+                    raise ValueError("ISR pin must be a number")
                 
-                self._log_debug(f"Connection settings updated: I2C Bus={i2c_bus_var.get()}, ADC={adc_address_var.get()}, IF-I={if_i_channel_var.get()}, IF-Q={if_q_channel_var.get()}, Rate={sampling_rate_var.get()}Hz, Serial={serial_port_var.get()}@{baud_rate_var.get()}", "INFO")
+                # Reinitialize motor control with new settings if on Linux
+                if platform.system() == 'Linux':
+                    # Cleanup old motor control
+                    if self.motor_gpio:
+                        try:
+                            self.motor_gpio.cleanup()
+                        except:
+                            pass
+                    # Reinitialize
+                    self.after(100, self._initialize_motor_control)
+                
+                self._log_debug(f"Connection settings updated: I2C Bus={i2c_bus_var.get()}, ADC={adc_address_var.get()}, IF-I={if_i_channel_var.get()}, IF-Q={if_q_channel_var.get()}, Rate={sampling_rate_var.get()}Hz, MCU={microcontroller_address_var.get()}, ISR Pin={isr_pin_var.get()}, Serial={serial_port_var.get()}@{baud_rate_var.get()}", "INFO")
                 self._update_status("Connection settings saved", "success")
                 dialog.destroy()
             except ValueError as e:
@@ -1822,6 +2014,14 @@ For use on Raspberry Pi and other local systems."""
         # Stop any ongoing measurements
         self.is_measuring = False
         
+        # Cleanup motor control GPIO
+        if self.motor_gpio:
+            try:
+                self.motor_gpio.cleanup()
+                self._log_debug("Motor control GPIO cleaned up", "INFO")
+            except Exception as e:
+                self._log_debug(f"Error cleaning up GPIO: {e}", "WARNING")
+        
         # Close database connection
         if hasattr(self, 'db'):
             self.db.close()
@@ -1854,6 +2054,7 @@ class DebugConsole(tk.Toplevel):
         self._create_measurement_log_tab()
         self._create_console_tab()
         self._create_config_tab()
+        self._create_motor_control_tab()
         
         # Close button
         btn_frame = tk.Frame(self, bg=parent.COLORS['bg_main'])
@@ -1885,10 +2086,13 @@ class DebugConsole(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
     
     def _schedule_refresh(self):
-        """Schedule periodic refresh of measurement log."""
+        """Schedule periodic refresh of measurement log and motor control."""
         if self.winfo_exists():
             # Refresh measurement log every 2 seconds
             self._update_measurement_log()
+            # Update motor control status
+            if hasattr(self, 'motor_status_label'):
+                self._update_motor_control_status()
             self.after(2000, self._schedule_refresh)
     
     def _create_system_info_tab(self):
@@ -2011,6 +2215,247 @@ class DebugConsole(tk.Toplevel):
         
         self.config_text = text_widget
     
+    def _create_motor_control_tab(self):
+        """Create motor control tab for manual motor operation."""
+        frame = tk.Frame(self.notebook, bg=self.parent.COLORS['bg_main'])
+        self.notebook.add(frame, text="Motor Control")
+        
+        # Main content frame with padding
+        content = tk.Frame(frame, bg=self.parent.COLORS['bg_main'], padx=20, pady=20)
+        content.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title = tk.Label(content, text="Manual Motor Control",
+                        bg=self.parent.COLORS['bg_main'],
+                        fg=self.parent.COLORS['text_dark'],
+                        font=("Segoe UI", 14, "bold"))
+        title.pack(pady=(0, 20))
+        
+        # Motor Control Status Section
+        status_frame = tk.LabelFrame(content, text="Motor Status",
+                                    bg=self.parent.COLORS['bg_panel'],
+                                    fg=self.parent.COLORS['text_dark'],
+                                    font=("Segoe UI", 11, "bold"),
+                                    padx=15, pady=15)
+        status_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        status_info = tk.Label(status_frame,
+                              text="Status: Not Loaded",
+                              bg=self.parent.COLORS['bg_panel'],
+                              fg=self.parent.COLORS['text_dark'],
+                              font=("Segoe UI", 10),
+                              anchor="w")
+        status_info.pack(fill=tk.X, pady=5)
+        self.motor_status_label = status_info
+        
+        position_info = tk.Label(status_frame,
+                                text="Current Position: 0.0°",
+                                bg=self.parent.COLORS['bg_panel'],
+                                fg=self.parent.COLORS['text_dark'],
+                                font=("Segoe UI", 10),
+                                anchor="w")
+        position_info.pack(fill=tk.X, pady=5)
+        self.motor_position_label = position_info
+        
+        # Arm Movement Section
+        arm_frame = tk.LabelFrame(content, text="Arm Movement",
+                                 bg=self.parent.COLORS['bg_panel'],
+                                 fg=self.parent.COLORS['text_dark'],
+                                 font=("Segoe UI", 11, "bold"),
+                                 padx=15, pady=15)
+        arm_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        arm_input_frame = tk.Frame(arm_frame, bg=self.parent.COLORS['bg_panel'])
+        arm_input_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(arm_input_frame, text="Motor Number:",
+                bg=self.parent.COLORS['bg_panel'],
+                fg=self.parent.COLORS['text_dark'],
+                font=("Segoe UI", 10),
+                width=15,
+                anchor="w").pack(side=tk.LEFT, padx=(0, 10))
+        
+        arm_motor_var = tk.StringVar(value="0")
+        arm_motor_entry = tk.Entry(arm_input_frame, textvariable=arm_motor_var,
+                                  bg=self.parent.COLORS['bg_panel'],
+                                  fg=self.parent.COLORS['text_dark'],
+                                  font=("Segoe UI", 10),
+                                  width=10)
+        arm_motor_entry.pack(side=tk.LEFT, padx=(0, 20))
+        
+        tk.Label(arm_input_frame, text="Position (degrees):",
+                bg=self.parent.COLORS['bg_panel'],
+                fg=self.parent.COLORS['text_dark'],
+                font=("Segoe UI", 10),
+                width=18,
+                anchor="w").pack(side=tk.LEFT, padx=(0, 10))
+        
+        arm_position_var = tk.StringVar(value="0.0")
+        arm_position_entry = tk.Entry(arm_input_frame, textvariable=arm_position_var,
+                                      bg=self.parent.COLORS['bg_panel'],
+                                      fg=self.parent.COLORS['text_dark'],
+                                      font=("Segoe UI", 10),
+                                      width=15)
+        arm_position_entry.pack(side=tk.LEFT, padx=(0, 15))
+        
+        def move_arm():
+            try:
+                motor_num = int(arm_motor_var.get())
+                position = float(arm_position_var.get())
+                success = self.parent._send_motor_command(motor_num, position, command=0)
+                if success:
+                    self.parent._log_debug(f"Manual arm movement: Motor {motor_num} to {position:.2f}°", "INFO")
+                    messagebox.showinfo("Success", f"Arm movement command sent:\nMotor {motor_num} to {position:.2f}°")
+                else:
+                    messagebox.showerror("Error", "Failed to send arm movement command")
+            except ValueError as e:
+                messagebox.showerror("Invalid Input", f"Please enter valid numbers:\n{e}")
+        
+        move_arm_btn = tk.Button(arm_frame, text="Move Arm",
+                                command=move_arm,
+                                bg=self.parent.COLORS['secondary'],
+                                fg=self.parent.COLORS['text_light'],
+                                font=("Segoe UI", 10, "bold"),
+                                relief=tk.FLAT,
+                                padx=20, pady=8,
+                                cursor="hand2")
+        move_arm_btn.pack(pady=(10, 0))
+        
+        # Material Rotation Section
+        rotation_frame = tk.LabelFrame(content, text="Material Rotation",
+                                      bg=self.parent.COLORS['bg_panel'],
+                                      fg=self.parent.COLORS['text_dark'],
+                                      font=("Segoe UI", 11, "bold"),
+                                      padx=15, pady=15)
+        rotation_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        rotation_input_frame = tk.Frame(rotation_frame, bg=self.parent.COLORS['bg_panel'])
+        rotation_input_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(rotation_input_frame, text="Motor Number:",
+                bg=self.parent.COLORS['bg_panel'],
+                fg=self.parent.COLORS['text_dark'],
+                font=("Segoe UI", 10),
+                width=15,
+                anchor="w").pack(side=tk.LEFT, padx=(0, 10))
+        
+        rotation_motor_var = tk.StringVar(value="1")
+        rotation_motor_entry = tk.Entry(rotation_input_frame, textvariable=rotation_motor_var,
+                                       bg=self.parent.COLORS['bg_panel'],
+                                       fg=self.parent.COLORS['text_dark'],
+                                       font=("Segoe UI", 10),
+                                       width=10)
+        rotation_motor_entry.pack(side=tk.LEFT, padx=(0, 20))
+        
+        tk.Label(rotation_input_frame, text="Rotation Angle (degrees):",
+                bg=self.parent.COLORS['bg_panel'],
+                fg=self.parent.COLORS['text_dark'],
+                font=("Segoe UI", 10),
+                width=18,
+                anchor="w").pack(side=tk.LEFT, padx=(0, 10))
+        
+        rotation_angle_var = tk.StringVar(value="0.0")
+        rotation_angle_entry = tk.Entry(rotation_input_frame, textvariable=rotation_angle_var,
+                                        bg=self.parent.COLORS['bg_panel'],
+                                        fg=self.parent.COLORS['text_dark'],
+                                        font=("Segoe UI", 10),
+                                        width=15)
+        rotation_angle_entry.pack(side=tk.LEFT, padx=(0, 15))
+        
+        def rotate_material():
+            try:
+                motor_num = int(rotation_motor_var.get())
+                angle = float(rotation_angle_var.get())
+                success = self.parent._send_motor_command(motor_num, angle, command=0)
+                if success:
+                    self.parent._log_debug(f"Manual material rotation: Motor {motor_num} to {angle:.2f}°", "INFO")
+                    messagebox.showinfo("Success", f"Material rotation command sent:\nMotor {motor_num} to {angle:.2f}°")
+                else:
+                    messagebox.showerror("Error", "Failed to send rotation command")
+            except ValueError as e:
+                messagebox.showerror("Invalid Input", f"Please enter valid numbers:\n{e}")
+        
+        rotate_btn = tk.Button(rotation_frame, text="Rotate Material",
+                              command=rotate_material,
+                              bg=self.parent.COLORS['accent'],
+                              fg=self.parent.COLORS['text_light'],
+                              font=("Segoe UI", 10, "bold"),
+                              relief=tk.FLAT,
+                              padx=20, pady=8,
+                              cursor="hand2")
+        rotate_btn.pack(pady=(10, 0))
+        
+        # Quick Position Buttons
+        quick_frame = tk.LabelFrame(content, text="Quick Positions",
+                                   bg=self.parent.COLORS['bg_panel'],
+                                   fg=self.parent.COLORS['text_dark'],
+                                   font=("Segoe UI", 11, "bold"),
+                                   padx=15, pady=15)
+        quick_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        quick_btn_frame = tk.Frame(quick_frame, bg=self.parent.COLORS['bg_panel'])
+        quick_btn_frame.pack(fill=tk.X)
+        
+        def quick_move(motor_num, position, label):
+            success = self.parent._send_motor_command(motor_num, position, command=0)
+            if success:
+                self.parent._log_debug(f"Quick move: {label} - Motor {motor_num} to {position:.2f}°", "INFO")
+            else:
+                messagebox.showerror("Error", f"Failed to move {label}")
+        
+        quick_positions = [
+            ("0°", 0, 0.0),
+            ("45°", 0, 45.0),
+            ("90°", 0, 90.0),
+            ("Home (0°)", 0, 0.0),
+        ]
+        
+        for i, (label, motor, pos) in enumerate(quick_positions):
+            btn = tk.Button(quick_btn_frame, text=label,
+                           command=lambda m=motor, p=pos, l=label: quick_move(m, p, l),
+                           bg=self.parent.COLORS['text_muted'],
+                           fg=self.parent.COLORS['text_light'],
+                           font=("Segoe UI", 9),
+                           relief=tk.FLAT,
+                           padx=15, pady=5,
+                           cursor="hand2")
+            btn.grid(row=i // 2, column=i % 2, padx=5, pady=5, sticky="ew")
+        
+        quick_btn_frame.grid_columnconfigure(0, weight=1)
+        quick_btn_frame.grid_columnconfigure(1, weight=1)
+        
+        # Information text
+        info_text = tk.Text(content,
+                           bg=self.parent.COLORS['bg_panel'],
+                           fg=self.parent.COLORS['text_muted'],
+                           font=("Segoe UI", 9),
+                           wrap=tk.WORD,
+                           height=6,
+                           padx=12, pady=12,
+                           relief=tk.FLAT,
+                           bd=0)
+        info_text.pack(fill=tk.X, pady=(10, 0))
+        info_text.insert(1.0, 
+                        "Note: Motor control requires hardware connection on Raspberry Pi.\n"
+                        "On Windows, commands will be simulated.\n"
+                        "Default: Motor 0 = Arm, Motor 1 = Material Rotation\n"
+                        "Adjust motor numbers in the input fields as needed for your setup.")
+        info_text.config(state=tk.DISABLED)
+    
+    def _update_motor_control_status(self):
+        """Update motor control status display in the tab."""
+        if hasattr(self, 'motor_status_label') and hasattr(self, 'motor_position_label'):
+            # Update status
+            if self.parent.motor_control_enabled:
+                status_text = f"Status: {self.parent.motor_status_var.get()}"
+            else:
+                status_text = f"Status: {self.parent.motor_status_var.get()}"
+            self.motor_status_label.config(text=status_text)
+            
+            # Update position
+            position_text = f"Current Position: {self.parent.motor_position_var.get()}"
+            self.motor_position_label.config(text=position_text)
+    
     def _refresh_all(self):
         """Refresh all tabs with current data."""
         self._update_system_info()
@@ -2018,6 +2463,7 @@ class DebugConsole(tk.Toplevel):
         self._update_measurement_log()
         self.update_console_log()
         self._update_config()
+        self._update_motor_control_status()
     
     def _update_system_info(self):
         """Update system information tab."""
