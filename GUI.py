@@ -111,20 +111,9 @@ class SPAMGui(tk.Tk):
         self.temperature = 25.0  # °C
         self.humidity = 45.0  # %
         
-        # Connection settings
-        self.connection_settings = {
-            'i2c_bus': '1',  # I2C bus number (typically 1 on Raspberry Pi)
-            'adc_address': '0x48',  # ADC I2C address
-            'if_i_channel': '0',  # ADC channel for IF-I (In-phase)
-            'if_q_channel': '1',  # ADC channel for IF-Q (Quadrature)
-            'sampling_rate': '1000',  # ADC sampling rate (Hz)
-            'microcontroller_address': '0x55',  # Microcontroller I2C address for motor control
-            'isr_pin': '17',  # GPIO pin for interrupt (ISR)
-            'serial_port': 'COM1',
-            'baud_rate': '9600',
-            'timeout': '5.0',
-            'connection_type': 'I2C'
-        }
+        # Connection settings - load from file or use defaults
+        self.config_file = os.path.join(os.path.dirname(__file__), 'spam_config.json')
+        self.connection_settings = self._load_connection_settings()
         
         # Motor control state
         self.motor_control_enabled = False
@@ -132,8 +121,8 @@ class SPAMGui(tk.Tk):
         self.motor_gpio = None
         self.motor_movement_status = True  # True = ready, False = moving
         self.motor_collision_detected = False
-        self.motor_num = 0  # Default motor number
-        self.motor_command = 0  # Default command
+        self.motor_num = 1  # Default motor number (Motor 1 = Arm)
+        self.motor_command = 1  # Default command byte
         
         # Motor status variables for display
         self.motor_status_var = tk.StringVar(value="Not Initialized")
@@ -160,6 +149,43 @@ class SPAMGui(tk.Tk):
         
         # Handle window close
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+    
+    def _load_connection_settings(self):
+        """Load connection settings from file or return defaults."""
+        default_settings = {
+            'i2c_bus': '1',  # I2C bus number (typically 1 on Raspberry Pi)
+            'adc_address': '0x48',  # ADC I2C address
+            'if_i_channel': '0',  # ADC channel for IF-I (In-phase)
+            'if_q_channel': '1',  # ADC channel for IF-Q (Quadrature)
+            'sampling_rate': '1000',  # ADC sampling rate (Hz)
+            'microcontroller_address': '0x55',  # Microcontroller I2C address for motor control
+            'isr_pin': '17',  # GPIO pin for interrupt (ISR)
+            'serial_port': 'COM1',
+            'baud_rate': '9600',
+            'timeout': '5.0',
+            'connection_type': 'I2C'
+        }
+        
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    saved_settings = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    default_settings.update(saved_settings)
+            except Exception as e:
+                # Can't use _log_debug here as it's not initialized yet
+                print(f"Error loading config file: {e}, using defaults")
+        
+        return default_settings
+    
+    def _save_connection_settings(self):
+        """Save connection settings to file."""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.connection_settings, f, indent=2)
+            self._log_debug(f"Saved connection settings to {self.config_file}", "INFO")
+        except Exception as e:
+            self._log_debug(f"Error saving config file: {e}", "WARNING")
     
     def _initialize_background(self):
         """Initialize database and start updates after UI is shown."""
@@ -253,7 +279,7 @@ class SPAMGui(tk.Tk):
             self._log_debug("Check I2C connection and GPIO permissions", "ERROR")
             self.motor_control_enabled = False
     
-    def _send_motor_command(self, motor_num: int, position: float, command: int = 0) -> bool:
+    def _send_motor_command(self, motor_num: int, position: float, command: int = 1) -> bool:
         """
         Send motor position command via I2C.
         
@@ -278,17 +304,48 @@ class SPAMGui(tk.Tk):
             import struct
             
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+            i2c_bus_num = int(self.connection_settings.get('i2c_bus', '1'))
             
-            # Pack position as float (little-endian)
-            packed_val = struct.pack('<f', position)
+            # Pack position as float (little-endian) - 4 bytes
+            # Format matches motor_control_status.py: [command, motorNum, float_bytes...]
+            packed_val = struct.pack('<f', position)  # '<f' = little-endian float (4 bytes)
             
-            # Create message: [command, motorNum, position_bytes...]
-            message = list(packed_val)
-            message.insert(0, command)
-            message.insert(1, motor_num)
+            # Create message: [command, motorNum, float_bytes...]
+            # Format: [1, 1, 0, 0, 0, 0] for command=1, motor=1, position=0.0° (6 bytes total)
+            message = list(packed_val)  # Convert bytes to list of integers
+            message.insert(0, command)  # Insert command at beginning
+            message.insert(1, motor_num)  # Insert motor number after command
+            
+            # Log detailed command information
+            position_bytes_hex = ' '.join([f'0x{b:02X}' for b in packed_val])
+            message_hex = ' '.join([f'0x{b:02X}' for b in message])
+            message_decimal = ', '.join([str(b) for b in message])
+            
+            # Decode float for verification
+            decoded_position = struct.unpack('<f', packed_val)[0]
+            
+            self._log_debug(f"=== Motor Command Details ===", "INFO")
+            self._log_debug(f"I2C Bus: {i2c_bus_num}, Address: 0x{mcu_address:02X}, Register: 0x00", "INFO")
+            self._log_debug(f"Command Byte: 0x{command:02X} ({command})", "INFO")
+            self._log_debug(f"Motor Number: {motor_num}", "INFO")
+            self._log_debug(f"Target Position: {position:.6f}°", "INFO")
+            self._log_debug(f"Position as float (4 bytes): {position}", "INFO")
+            self._log_debug(f"Position bytes (hex, float little-endian): {position_bytes_hex}", "INFO")
+            self._log_debug(f"Position bytes (decimal): {', '.join([str(b) for b in packed_val])}", "INFO")
+            self._log_debug(f"Decoded position (verification): {decoded_position:.6f}°", "INFO")
+            self._log_debug(f"Full message (hex): {message_hex}", "INFO")
+            self._log_debug(f"Full message (decimal): [{message_decimal}]", "INFO")
+            self._log_debug(f"Message format: [command={command}, motor={motor_num}, float_byte1={message[2]}, float_byte2={message[3]}, float_byte3={message[4]}, float_byte4={message[5]}]", "INFO")
+            self._log_debug(f"Message length: {len(message)} bytes (expected: 6 bytes)", "INFO")
+            self._log_debug(f"Example: Position 0° = [1, 1, 0, 0, 0, 0]", "INFO")
+            self._log_debug(f"Example: Position -30° = [1, 1, 0, 0, 240, 193]", "INFO")
             
             # Send command via I2C
+            self._log_debug(f"Sending I2C command: write_i2c_block_data(0x{mcu_address:02X}, 0x00, [{message_decimal}])", "INFO")
             self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
+            
+            self._log_debug(f"I2C write completed successfully", "SUCCESS")
+            self._log_debug(f"✓ Command sent successfully: [{message_decimal}]", "SUCCESS")
             
             self.motor_movement_status = False
             self.motor_status_var.set("Moving...")
@@ -296,11 +353,16 @@ class SPAMGui(tk.Tk):
             self.motor_command = command
             self.motor_position_var.set(f"{position:.1f}°")
             
-            self._log_debug(f"Motor {motor_num}: Command sent to position {position:.2f}°", "INFO")
+            self._log_debug(f"Motor {motor_num}: Command sent to position {position:.2f}° - Message: [{message_decimal}]", "SUCCESS")
             return True
             
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            self._log_debug(f"=== Motor Command Error ===", "ERROR")
             self._log_debug(f"Error sending motor command: {e}", "ERROR")
+            self._log_debug(f"Error type: {type(e).__name__}", "ERROR")
+            self._log_debug(f"Full traceback:\n{error_details}", "ERROR")
             self.motor_status_var.set("Error")
             return False
     
@@ -1751,7 +1813,7 @@ Latest Measurement:
         if_i_channel_var = tk.StringVar(value=self.connection_settings.get('if_i_channel', '0'))
         if_q_channel_var = tk.StringVar(value=self.connection_settings.get('if_q_channel', '1'))
         sampling_rate_var = tk.StringVar(value=self.connection_settings.get('sampling_rate', '1000'))
-        microcontroller_address_var = tk.StringVar(value=self.connection_settings.get('microcontroller_address', '0x50'))
+        microcontroller_address_var = tk.StringVar(value=self.connection_settings.get('microcontroller_address', '0x55'))
         
         tk.Label(signal_frame, text="I2C Bus:", 
                 bg=self.COLORS['bg_panel'],
@@ -1872,34 +1934,69 @@ Latest Measurement:
         
         def save_connection():
             try:
+                # Get values from entry fields
+                i2c_bus_val = i2c_bus_var.get().strip()
+                adc_address_val = adc_address_var.get().strip()
+                if_i_channel_val = if_i_channel_var.get().strip()
+                if_q_channel_val = if_q_channel_var.get().strip()
+                sampling_rate_val = sampling_rate_var.get().strip()
+                mcu_address_val = microcontroller_address_var.get().strip()
+                isr_pin_val = isr_pin_var.get().strip()
+                serial_port_val = serial_port_var.get().strip()
+                baud_rate_val = baud_rate_var.get().strip()
+                timeout_val = timeout_var.get().strip()
+                
+                # Validate
+                if not i2c_bus_val.isdigit():
+                    raise ValueError("I2C bus must be a number")
+                if not if_i_channel_val.isdigit():
+                    raise ValueError("IF-I channel must be a number")
+                if not if_q_channel_val.isdigit():
+                    raise ValueError("IF-Q channel must be a number")
+                if not sampling_rate_val.isdigit():
+                    raise ValueError("Sampling rate must be a number")
+                if not baud_rate_val.isdigit():
+                    raise ValueError("Baud rate must be a number")
+                if not isr_pin_val.isdigit():
+                    raise ValueError("ISR pin must be a number")
+                
+                # Validate hex address format
+                if mcu_address_val.startswith('0x') or mcu_address_val.startswith('0X'):
+                    try:
+                        int(mcu_address_val, 16)  # Validate it's valid hex
+                    except ValueError:
+                        raise ValueError("Microcontroller address must be a valid hex number (e.g., 0x55)")
+                else:
+                    raise ValueError("Microcontroller address must be in hex format (e.g., 0x55)")
+                
+                if adc_address_val.startswith('0x') or adc_address_val.startswith('0X'):
+                    try:
+                        int(adc_address_val, 16)
+                    except ValueError:
+                        raise ValueError("ADC address must be a valid hex number (e.g., 0x48)")
+                else:
+                    raise ValueError("ADC address must be in hex format (e.g., 0x48)")
+                
                 # Save connection settings
                 self.connection_settings = {
-                    'i2c_bus': i2c_bus_var.get(),
-                    'adc_address': adc_address_var.get(),
-                    'if_i_channel': if_i_channel_var.get(),
-                    'if_q_channel': if_q_channel_var.get(),
-                    'sampling_rate': sampling_rate_var.get(),
-                    'microcontroller_address': microcontroller_address_var.get(),
-                    'isr_pin': isr_pin_var.get(),
-                    'serial_port': serial_port_var.get(),
-                    'baud_rate': baud_rate_var.get(),
-                    'timeout': timeout_var.get(),
+                    'i2c_bus': i2c_bus_val,
+                    'adc_address': adc_address_val,
+                    'if_i_channel': if_i_channel_val,
+                    'if_q_channel': if_q_channel_val,
+                    'sampling_rate': sampling_rate_val,
+                    'microcontroller_address': mcu_address_val,
+                    'isr_pin': isr_pin_val,
+                    'serial_port': serial_port_val,
+                    'baud_rate': baud_rate_val,
+                    'timeout': timeout_val,
                     'connection_type': 'I2C'
                 }
                 
-                # Validate
-                if not i2c_bus_var.get().isdigit():
-                    raise ValueError("I2C bus must be a number")
-                if not if_i_channel_var.get().isdigit():
-                    raise ValueError("IF-I channel must be a number")
-                if not if_q_channel_var.get().isdigit():
-                    raise ValueError("IF-Q channel must be a number")
-                if not sampling_rate_var.get().isdigit():
-                    raise ValueError("Sampling rate must be a number")
-                if not baud_rate_var.get().isdigit():
-                    raise ValueError("Baud rate must be a number")
-                if not isr_pin_var.get().isdigit():
-                    raise ValueError("ISR pin must be a number")
+                # Persist to file
+                self._save_connection_settings()
+                
+                # Log the saved values for debugging
+                self._log_debug(f"Connection settings saved: I2C Bus={i2c_bus_val}, ADC={adc_address_val}, IF-I={if_i_channel_val}, IF-Q={if_q_channel_val}, Rate={sampling_rate_val}Hz, MCU={mcu_address_val}, ISR Pin={isr_pin_val}, Serial={serial_port_val}@{baud_rate_val}", "INFO")
                 
                 # Reinitialize motor control with new settings if on Linux
                 if platform.system() == 'Linux':
@@ -1909,14 +2006,27 @@ Latest Measurement:
                             self.motor_gpio.cleanup()
                         except:
                             pass
-                    # Reinitialize
-                    self.after(100, self._initialize_motor_control)
+                    if self.motor_bus:
+                        try:
+                            self.motor_bus.close()
+                        except:
+                            pass
+                    # Reset motor control state
+                    self.motor_control_enabled = False
+                    self.motor_bus = None
+                    # Reinitialize after a short delay
+                    self.after(200, self._initialize_motor_control)
                 
-                self._log_debug(f"Connection settings updated: I2C Bus={i2c_bus_var.get()}, ADC={adc_address_var.get()}, IF-I={if_i_channel_var.get()}, IF-Q={if_q_channel_var.get()}, Rate={sampling_rate_var.get()}Hz, MCU={microcontroller_address_var.get()}, ISR Pin={isr_pin_var.get()}, Serial={serial_port_var.get()}@{baud_rate_var.get()}", "INFO")
-                self._update_status("Connection settings saved", "success")
+                self._update_status(f"Connection settings saved: I2C Bus={i2c_bus_val}, MCU={mcu_address_val}", "success")
+                messagebox.showinfo("Settings Saved", 
+                    f"Connection settings have been saved successfully.\n\n"
+                    f"I2C Bus: {i2c_bus_val}\n"
+                    f"Microcontroller Address: {mcu_address_val}\n"
+                    f"ISR Pin: {isr_pin_val}\n\n"
+                    f"Motor control will be reinitialized with new settings.")
                 dialog.destroy()
             except ValueError as e:
-                messagebox.showerror("Invalid Setting", str(e))
+                messagebox.showerror("Invalid Setting", f"Please check your input:\n\n{str(e)}")
         
         def test_connection():
             messagebox.showinfo("Connection Test", 
@@ -2275,7 +2385,7 @@ class DebugConsole(tk.Toplevel):
                 width=15,
                 anchor="w").pack(side=tk.LEFT, padx=(0, 10))
         
-        arm_motor_var = tk.StringVar(value="0")
+        arm_motor_var = tk.StringVar(value="1")
         arm_motor_entry = tk.Entry(arm_input_frame, textvariable=arm_motor_var,
                                   bg=self.parent.COLORS['bg_panel'],
                                   fg=self.parent.COLORS['text_dark'],
@@ -2302,13 +2412,25 @@ class DebugConsole(tk.Toplevel):
             try:
                 motor_num = int(arm_motor_var.get())
                 position = float(arm_position_var.get())
-                success = self.parent._send_motor_command(motor_num, position, command=0)
+                self.parent._log_debug(f"=== Manual Arm Movement Request ===", "INFO")
+                self.parent._log_debug(f"Requested: Motor {motor_num} to position {position:.6f}°", "INFO")
+                success = self.parent._send_motor_command(motor_num, position, command=1)
                 if success:
-                    self.parent._log_debug(f"Manual arm movement: Motor {motor_num} to {position:.2f}°", "INFO")
-                    messagebox.showinfo("Success", f"Arm movement command sent:\nMotor {motor_num} to {position:.2f}°")
+                    self.parent._log_debug(f"Manual arm movement: Motor {motor_num} to {position:.2f}° - Command sent successfully", "SUCCESS")
+                    messagebox.showinfo("Success", 
+                        f"Arm movement command sent:\n\n"
+                        f"Motor: {motor_num}\n"
+                        f"Position: {position:.2f}°\n\n"
+                        f"Check Debug Console (Ctrl+D) → Console tab\n"
+                        f"for detailed command information.")
                 else:
-                    messagebox.showerror("Error", "Failed to send arm movement command")
+                    self.parent._log_debug(f"Manual arm movement: Motor {motor_num} to {position:.2f}° - FAILED", "ERROR")
+                    messagebox.showerror("Error", 
+                        f"Failed to send arm movement command.\n\n"
+                        f"Check Debug Console (Ctrl+D) → Console tab\n"
+                        f"for error details.")
             except ValueError as e:
+                self.parent._log_debug(f"Manual arm movement: Invalid input - {e}", "ERROR")
                 messagebox.showerror("Invalid Input", f"Please enter valid numbers:\n{e}")
         
         move_arm_btn = tk.Button(arm_frame, text="Move Arm",
@@ -2366,13 +2488,25 @@ class DebugConsole(tk.Toplevel):
             try:
                 motor_num = int(rotation_motor_var.get())
                 angle = float(rotation_angle_var.get())
-                success = self.parent._send_motor_command(motor_num, angle, command=0)
+                self.parent._log_debug(f"=== Manual Material Rotation Request ===", "INFO")
+                self.parent._log_debug(f"Requested: Motor {motor_num} to angle {angle:.6f}°", "INFO")
+                success = self.parent._send_motor_command(motor_num, angle, command=1)
                 if success:
-                    self.parent._log_debug(f"Manual material rotation: Motor {motor_num} to {angle:.2f}°", "INFO")
-                    messagebox.showinfo("Success", f"Material rotation command sent:\nMotor {motor_num} to {angle:.2f}°")
+                    self.parent._log_debug(f"Manual material rotation: Motor {motor_num} to {angle:.2f}° - Command sent successfully", "SUCCESS")
+                    messagebox.showinfo("Success", 
+                        f"Material rotation command sent:\n\n"
+                        f"Motor: {motor_num}\n"
+                        f"Angle: {angle:.2f}°\n\n"
+                        f"Check Debug Console (Ctrl+D) → Console tab\n"
+                        f"for detailed command information.")
                 else:
-                    messagebox.showerror("Error", "Failed to send rotation command")
+                    self.parent._log_debug(f"Manual material rotation: Motor {motor_num} to {angle:.2f}° - FAILED", "ERROR")
+                    messagebox.showerror("Error", 
+                        f"Failed to send rotation command.\n\n"
+                        f"Check Debug Console (Ctrl+D) → Console tab\n"
+                        f"for error details.")
             except ValueError as e:
+                self.parent._log_debug(f"Manual material rotation: Invalid input - {e}", "ERROR")
                 messagebox.showerror("Invalid Input", f"Please enter valid numbers:\n{e}")
         
         rotate_btn = tk.Button(rotation_frame, text="Rotate Material",
@@ -2438,7 +2572,7 @@ class DebugConsole(tk.Toplevel):
         info_text.insert(1.0, 
                         "Note: Motor control requires hardware connection on Raspberry Pi.\n"
                         "On Windows, commands will be simulated.\n"
-                        "Default: Motor 0 = Arm, Motor 1 = Material Rotation\n"
+                        "Default: Motor 1 = Arm, Motor 2 = Material Rotation\n"
                         "Adjust motor numbers in the input fields as needed for your setup.")
         info_text.config(state=tk.DISABLED)
     

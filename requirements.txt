@@ -8,20 +8,11 @@ sqlalchemy>=2.0.23
 matplotlib>=3.7.0
 numpy>=1.24.0
 
-# Note: tkinter comes pre-installed with Python on most systems
-# If not available, install: sudo apt-get install python3-tk (Linux/Raspberry Pi)
-
-
-# SPAM Local Application Requirements
-# For Raspberry Pi and local desktop use
-
-# Database
-sqlalchemy>=2.0.23
-
-# GUI
-matplotlib>=3.7.0
-numpy>=1.24.0
+# Motor Control (Raspberry Pi only - optional, will work without on other platforms)
+# Note: smbus may be provided by system package 'python3-smbus' instead
+# Install with: sudo apt-get install python3-smbus python3-rpi.gpio
+# Or use pip: smbus2>=0.4.0 (but code may need import adjustment)
+RPi.GPIO>=0.7.0; sys_platform == "linux"
 
 # Note: tkinter comes pre-installed with Python on most systems
 # If not available, install: sudo apt-get install python3-tk (Linux/Raspberry Pi)
-
