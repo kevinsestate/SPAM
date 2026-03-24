@@ -8,6 +8,9 @@ sqlalchemy>=2.0.23
 matplotlib>=3.7.0
 numpy>=1.24.0
 
+# Material extraction (T-matrix computation and inverse solver)
+scipy>=1.10.0
+
 # Motor Control (Raspberry Pi only - optional, will work without on other platforms)
 # Note: smbus may be provided by system package 'python3-smbus' instead
 # Install with: sudo apt-get install python3-smbus python3-rpi.gpio

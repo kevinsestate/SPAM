@@ -1,0 +1,10 @@
+# SPAM Refactored - Python Dependencies
+sqlalchemy>=2.0.23
+matplotlib>=3.7.0
+numpy>=1.24.0
+
+# Motor Control (Raspberry Pi only)
+RPi.GPIO>=0.7.0; sys_platform == "linux"
+
+# Note: tkinter comes pre-installed with Python on most systems
+# If not available: sudo apt-get install python3-tk (Linux)

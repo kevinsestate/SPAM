@@ -1,0 +1,14 @@
+{
+  "i2c_bus": "1",
+  "adc_address": "0x48",
+  "if_i_channel": "0",
+  "if_q_channel": "1",
+  "sampling_rate": "1000",
+  "microcontroller_address": "0x55",
+  "isr_pin": "17",
+  "serial_port": "COM1",
+  "baud_rate": "9600",
+  "timeout": "5.0",
+  "connection_type": "I2C",
+  "theme": "dark"
+}

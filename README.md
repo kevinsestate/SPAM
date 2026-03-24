@@ -430,6 +430,17 @@ Run the application and test:
 - The application is designed to run standalone on a Raspberry Pi
 - The web frontend (React) and FastAPI backend are no longer needed for local operation
 
+## Integration Testing
+
+For detailed integration test plans and rubrics, see [INTEGRATION_TEST_PLAN.md](INTEGRATION_TEST_PLAN.md).
+
+The integration test plan includes:
+- Motor control and measurement sweep integration tests
+- Calibration process integration tests
+- Manual motor control and I2C communication verification
+- Quantitative success criteria for each test
+- Test execution logs and assessment rubrics
+
 ## License
 
 This project is provided as-is for educational and development purposes.

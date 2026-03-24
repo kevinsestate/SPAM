@@ -2,7 +2,8 @@
 Database configuration and session management for SPAM application.
 """
 import os
-from sqlalchemy import create_engine
+import sqlite3
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -24,3 +25,28 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Base class for declarative models
 Base = declarative_base()
+
+
+def migrate_db():
+    """Add any missing columns to existing tables so the app works with old DBs."""
+    if not os.path.exists(DATABASE_FILE):
+        return
+    conn = sqlite3.connect(DATABASE_FILE)
+    try:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(measurements)").fetchall()}
+        migrations = [
+            ("transmitted_power", "REAL"),
+            ("reflected_power",   "REAL"),
+            ("transmitted_phase",  "REAL"),
+            ("reflected_phase",    "REAL"),
+            ("s_matrix_json",      "TEXT"),
+        ]
+        for col_name, col_type in migrations:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE measurements ADD COLUMN {col_name} {col_type}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+migrate_db()

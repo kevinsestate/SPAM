@@ -1,0 +1,532 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{enumitem}
+
+% Page setup
+\geometry{margin=1in}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={SPAM Code Structure},
+    pdfauthor={SPAM Development Team}
+}
+
+% Code listing style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=4,
+    showspaces=false,
+    showstringspaces=false
+}
+
+\title{\textbf{SPAM Code Structure Documentation}\\
+\large Scanner for Polarized Anisotropic Materials\\
+\large Code Architecture Overview}
+\author{SPAM Development Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Project Overview}
+
+The SPAM (Scanner for Polarized Anisotropic Materials) project is a Python-based desktop application for automated material characterization. The codebase is organized into a modular structure with clear separation between GUI, database, and hardware control components.
+
+\section{Project Structure}
+
+\subsection{Directory Layout}
+\begin{verbatim}
+SPAM/
+├── GUI.py                    # Main application file
+├── motor_control_status.py   # Motor control reference
+├── requirements.txt          # Python dependencies
+├── start_spam.sh            # Linux startup script
+├── start_spam.bat           # Windows startup script
+├── spam_config.json         # Configuration file (auto-generated)
+├── spam.db                  # SQLite database (auto-generated)
+├── backend/
+│   ├── __init__.py          # Package marker
+│   ├── database.py          # Database configuration
+│   └── models.py            # Database models
+└── venv/                    # Virtual environment
+\end{verbatim}
+
+\subsection{Key Files}
+
+\begin{description}
+    \item[\texttt{GUI.py}] Main application file containing the entire GUI and application logic (3000+ lines)
+    \item[\texttt{backend/database.py}] Database connection and session management
+    \item[\texttt{backend/models.py}] SQLAlchemy ORM models for data storage
+    \item[\texttt{motor\_control\_status.py}] Reference implementation for motor control
+    \item[\texttt{requirements.txt}] Python package dependencies
+    \item[\texttt{start\_spam.sh/bat}] Platform-specific startup scripts
+\end{description}
+
+\section{Main Components}
+
+\subsection{GUI.py - Main Application}
+
+\texttt{GUI.py} is the core of the application, containing a single main class that handles all functionality.
+
+\subsubsection{SPAMGui Class}
+The \texttt{SPAMGui} class inherits from \texttt{tk.Tk}, making it the main application window.
+
+\textbf{Key Responsibilities:}
+\begin{itemize}
+    \item GUI component creation and layout
+    \item User interaction handling
+    \item Measurement workflow management
+    \item Motor control integration
+    \item Database operations
+    \item Real-time data visualization
+\end{itemize}
+
+\textbf{Initialization Flow:}
+\begin{enumerate}
+    \item Window setup (size, title, colors)
+    \item State variable initialization
+    \item Load configuration from JSON file
+    \item Create all UI components
+    \item Initialize database connection
+    \item Initialize motor control (if on Raspberry Pi)
+    \item Start periodic display updates
+\end{enumerate}
+
+\subsubsection{Main Methods by Category}
+
+\textbf{UI Creation Methods:}
+\begin{itemize}
+    \item \texttt{\_create\_menu()} - Creates menu bar
+    \item \texttt{\_create\_sidebar()} - Creates left control panel
+    \item \texttt{\_create\_info\_panel()} - Creates right info display
+    \item \texttt{\_create\_center\_panel()} - Creates graph area
+    \item \texttt{\_create\_control\_panel()} - Creates bottom control panel
+    \item \texttt{\_create\_status\_bar()} - Creates status bar
+\end{itemize}
+
+\textbf{Measurement Methods:}
+\begin{itemize}
+    \item \texttt{\_on\_start\_measurement()} - Starts measurement thread
+    \item \texttt{\_on\_stop\_measurement()} - Stops measurement
+    \item \texttt{\_measurement\_worker()} - Background measurement thread
+    \item \texttt{\_on\_calibrate()} - Two-step calibration process
+\end{itemize}
+
+\textbf{Motor Control Methods:}
+\begin{itemize}
+    \item \texttt{\_initialize\_motor\_control()} - Initializes I2C/GPIO
+    \item \texttt{\_send\_motor\_command()} - Sends I2C motor commands
+    \item \texttt{\_wait\_for\_motor\_position()} - Waits for position reached
+\end{itemize}
+
+\textbf{Database Methods:}
+\begin{itemize}
+    \item \texttt{\_create\_measurement()} - Stores measurement in database
+    \item \texttt{\_create\_calibration()} - Stores calibration record
+    \item \texttt{\_get\_measurements()} - Retrieves measurements
+\end{itemize}
+
+\textbf{Display Methods:}
+\begin{itemize}
+    \item \texttt{\_update\_graphs()} - Updates all graphs
+    \item \texttt{\_update\_display()} - Periodic display refresh
+    \item \texttt{\_update\_status()} - Updates status bar
+\end{itemize}
+
+\textbf{Settings Methods:}
+\begin{itemize}
+    \item \texttt{\_on\_connection\_setup()} - Connection settings dialog
+    \item \texttt{\_on\_adjust\_parameters()} - Parameter adjustment dialog
+    \item \texttt{\_load\_connection\_settings()} - Loads config from JSON
+    \item \texttt{\_save\_connection\_settings()} - Saves config to JSON
+\end{itemize}
+
+\subsubsection{Debug Console Class}
+The \texttt{DebugConsole} class is a separate window for diagnostics:
+\begin{itemize}
+    \item System information tab
+    \item Database information tab
+    \item Measurement log tab
+    \item Console log tab
+    \item Configuration tab
+    \item Motor control tab
+\end{itemize}
+
+\subsection{Backend Package}
+
+\subsubsection{database.py}
+Handles database connection and session management.
+
+\textbf{Key Components:}
+\begin{itemize}
+    \item \texttt{SQLALCHEMY\_DATABASE\_URL} - SQLite database path
+    \item \texttt{engine} - SQLAlchemy engine instance
+    \item \texttt{SessionLocal} - Session factory for database operations
+    \item \texttt{Base} - Base class for ORM models
+\end{itemize}
+
+\textbf{Purpose:}
+\begin{itemize}
+    \item Creates SQLite database file (\texttt{spam.db})
+    \item Manages database connections
+    \item Provides session factory for database operations
+\end{itemize}
+
+\subsubsection{models.py}
+Defines database schema using SQLAlchemy ORM.
+
+\textbf{Measurement Model:}
+\begin{itemize}
+    \item Stores angle sweep measurement data
+    \item Fields: id, angle, permittivity, permeability, transmitted/reflected power/phase, timestamp
+    \item Indexed on angle and timestamp for fast queries
+\end{itemize}
+
+\textbf{Calibration Model:}
+\begin{itemize}
+    \item Stores calibration records
+    \item Fields: id, timestamp, parameters (JSON), status
+    \item Used for two-step calibration process
+\end{itemize}
+
+\section{Data Flow}
+
+\subsection{Application Startup}
+\begin{enumerate}
+    \item \texttt{main()} function called
+    \item Creates \texttt{SPAMGui} instance
+    \item \texttt{\_\_init\_\_()} initializes all components
+    \item Database tables created (if first run)
+    \item Configuration loaded from \texttt{spam\_config.json}
+    \item Motor control initialized (if on Linux)
+    \item GUI displayed and ready for user interaction
+\end{enumerate}
+
+\subsection{Measurement Workflow}
+\begin{enumerate}
+    \item User clicks "Start Measurement"
+    \item \texttt{\_on\_start\_measurement()} called
+    \item Measurement thread spawned (\texttt{\_measurement\_worker})
+    \item Thread loops through angles (0° to 90°):
+    \begin{enumerate}
+        \item Send motor command via I2C
+        \item Wait for position reached
+        \item Read ADC signals (I/Q channels)
+        \item Calculate power and phase
+        \item Calculate material properties (ε, μ)
+        \item Store measurement in database
+        \item Update GUI graphs and displays
+        \item Increment angle
+    \end{enumerate}
+    \item Thread completes, updates status
+\end{enumerate}
+
+\subsection{Data Storage Flow}
+\begin{enumerate}
+    \item Measurement data calculated
+    \item \texttt{\_create\_measurement()} called
+    \item Creates \texttt{Measurement} object with all fields
+    \item Adds to database session
+    \item Commits transaction
+    \item Data persisted to \texttt{spam.db}
+\end{enumerate}
+
+\subsection{Display Update Flow}
+\begin{enumerate}
+    \item \texttt{\_update\_display()} called periodically (every 1 second)
+    \item Calls \texttt{\_update\_graphs()}
+    \item Queries database for latest measurements
+    \item Extracts data arrays (angles, permittivity, permeability, power, phase)
+    \item Updates Matplotlib graphs
+    \item Updates info panel values
+    \item Updates status indicators
+    \item Schedules next update
+\end{enumerate}
+
+\section{Key Technologies}
+
+\subsection{Python Libraries}
+\begin{description}
+    \item[\texttt{tkinter}] GUI framework (built-in)
+    \item[\texttt{matplotlib}] Graph plotting and visualization
+    \item[\texttt{sqlalchemy}] ORM for database operations
+    \item[\texttt{numpy}] Numerical computations
+    \item[\texttt{smbus}] I2C communication (Raspberry Pi)
+    \item[\texttt{RPi.GPIO}] GPIO control (Raspberry Pi)
+\end{description}
+
+\subsection{Communication Protocols}
+\begin{description}
+    \item[\texttt{I2C}] Motor control communication (Raspberry Pi)
+    \item[\texttt{GPIO}] Interrupt handling for motor status
+    \item[\texttt{SQLite}] Local database storage
+    \item[\texttt{JSON}] Configuration file format
+\end{description}
+
+\section{Configuration Management}
+
+\subsection{Configuration File}
+Settings stored in \texttt{spam\_config.json}:
+\begin{itemize}
+    \item I2C bus number
+    \item ADC I2C address
+    \item IF-I and IF-Q channel numbers
+    \item Sampling rate
+    \item Microcontroller I2C address
+    \item ISR GPIO pin number
+\end{itemize}
+
+\subsection{Configuration Flow}
+\begin{enumerate}
+    \item On startup: Load settings from JSON file
+    \item If file doesn't exist: Use default values
+    \item User changes settings via dialog
+    \item Settings validated
+    \item Saved to JSON file
+    \item Motor control reinitialized with new settings
+\end{enumerate}
+
+\section{Motor Control Integration}
+
+\subsection{I2C Communication}
+\begin{itemize}
+    \item Uses \texttt{smbus} library on Raspberry Pi
+    \item Communicates with microcontroller at address 0x55
+    \item Sends 6-byte commands: \texttt{[command, motor\_num, float\_bytes...]}
+    \item Position encoded as 4-byte little-endian float
+\end{itemize}
+
+\subsection{GPIO Interrupts}
+\begin{itemize}
+    \item ISR pin (default: GPIO 17) configured for interrupts
+    \item Interrupt handler reads status register
+    \item Detects collision (bit 0x01) and position reached (bit 0x02)
+    \item Updates GUI via thread-safe \texttt{self.after()} calls
+\end{itemize}
+
+\subsection{Platform Detection}
+\begin{itemize}
+    \item Windows: Motor control in simulation mode
+    \item Linux: Full hardware integration
+    \item Automatic detection via \texttt{platform.system()}
+\end{itemize}
+
+\section{Threading Model}
+
+\subsection{Main Thread}
+\begin{itemize}
+    \item GUI event loop (Tkinter)
+    \item Handles user interactions
+    \item Updates display
+    \item Manages UI components
+\end{itemize}
+
+\subsection{Measurement Thread}
+\begin{itemize}
+    \item Background worker for measurements
+    \item Runs \texttt{\_measurement\_worker()} function
+    \item Performs motor control and data acquisition
+    \item Updates GUI via \texttt{self.after()} for thread safety
+\end{itemize}
+
+\subsection{Thread Safety}
+\begin{itemize}
+    \item GUI updates from background thread use \texttt{self.after()}
+    \item Database operations are thread-safe (SQLAlchemy)
+    \item Motor control uses proper synchronization
+\end{itemize}
+
+\section{Graph Visualization}
+
+\subsection{Graph Types}
+The application displays four real-time graphs:
+\begin{enumerate}
+    \item \textbf{Permittivity vs Angle} - Material permittivity over sweep
+    \item \textbf{Permeability vs Angle} - Material permeability over sweep
+    \item \textbf{Power vs Angle} - Transmitted and reflected power
+    \item \textbf{Phase vs Angle} - Transmitted and reflected phase
+\end{enumerate}
+
+\subsection{Graph Implementation}
+\begin{itemize}
+    \item Uses Matplotlib's \texttt{FigureCanvasTkAgg} for embedding
+    \item Graphs contained in scrollable frame
+    \item Auto-scaling based on data range
+    \item Real-time updates from database queries
+    \item Professional styling with color scheme
+\end{itemize}
+
+\section{Database Schema}
+
+\subsection{Measurements Table}
+\begin{verbatim}
+CREATE TABLE measurements (
+    id INTEGER PRIMARY KEY,
+    angle FLOAT NOT NULL,
+    permittivity FLOAT NOT NULL,
+    permeability FLOAT NOT NULL,
+    transmitted_power FLOAT,
+    reflected_power FLOAT,
+    transmitted_phase FLOAT,
+    reflected_phase FLOAT,
+    timestamp DATETIME NOT NULL
+);
+\end{verbatim}
+
+\subsection{Calibrations Table}
+\begin{verbatim}
+CREATE TABLE calibrations (
+    id INTEGER PRIMARY KEY,
+    timestamp DATETIME NOT NULL,
+    parameters JSON,
+    status VARCHAR NOT NULL
+);
+\end{verbatim}
+
+\section{Error Handling}
+
+\subsection{Error Types}
+\begin{itemize}
+    \item Hardware errors (I2C, GPIO failures)
+    \item Database errors (connection, query failures)
+    \item Measurement errors (motor timeouts, collisions)
+    \item User input errors (invalid values)
+\end{itemize}
+
+\subsection{Error Handling Strategy}
+\begin{itemize}
+    \item Try-except blocks around critical operations
+    \item User-friendly error messages
+    \item Logging to debug console
+    \item Graceful degradation (continue when possible)
+    \item Status bar updates for user feedback
+\end{itemize}
+
+\section{Export Functionality}
+
+\subsection{Export Formats}
+\begin{itemize}
+    \item \textbf{CSV}: Comma-separated values for spreadsheet import
+    \item \textbf{JSON}: Structured data format for programmatic access
+\end{itemize}
+
+\subsection{Export Process}
+\begin{enumerate}
+    \item User clicks "Export" button
+    \item Selects format (CSV or JSON)
+    \item Chooses save location
+    \item All measurements retrieved from database
+    \item Data formatted and written to file
+    \item File saved with timestamp in filename
+\end{enumerate}
+
+\section{Startup Scripts}
+
+\subsection{start\_spam.sh (Linux)}
+\begin{itemize}
+    \item Checks Python installation
+    \item Creates virtual environment if needed
+    \item Installs dependencies
+    \item Handles DNS/network issues
+    \item Sets display for VNC
+    \item Launches GUI application
+\end{itemize}
+
+\subsection{start\_spam.bat (Windows)}
+\begin{itemize}
+    \item Checks Python installation
+    \item Creates virtual environment if needed
+    \item Installs dependencies
+    \item Launches GUI application
+\end{itemize}
+
+\section{Code Organization Principles}
+
+\subsection{Modularity}
+\begin{itemize}
+    \item Single main class (\texttt{SPAMGui}) for GUI
+    \item Separate backend package for database
+    \item Clear method naming conventions
+    \item Logical grouping of related methods
+\end{itemize}
+
+\subsection{Separation of Concerns}
+\begin{itemize}
+    \item GUI logic in \texttt{GUI.py}
+    \item Database logic in \texttt{backend/}
+    \item Configuration separate from code
+    \item Hardware abstraction for platform differences
+\end{itemize}
+
+\subsection{Maintainability}
+\begin{itemize}
+    \item Clear method names (\texttt{\_create\_}, \texttt{\_on\_}, \texttt{\_update\_})
+    \item Comprehensive comments
+    \item Consistent code style
+    \item Error handling throughout
+\end{itemize}
+
+\section{Key Design Patterns}
+
+\subsection{Singleton Pattern}
+\begin{itemize}
+    \item Single \texttt{SPAMGui} instance
+    \item Single database session
+    \item Single configuration file
+\end{itemize}
+
+\subsection{Observer Pattern}
+\begin{itemize}
+    \item GUI updates observe database changes
+    \item Status updates observe measurement state
+    \item Graph updates observe new measurements
+\end{itemize}
+
+\subsection{Factory Pattern}
+\begin{itemize}
+    \item \texttt{SessionLocal} creates database sessions
+    \item Measurement objects created via factory method
+\end{itemize}
+
+\section{Summary}
+
+The SPAM codebase follows a clear, modular structure:
+\begin{itemize}
+    \item \textbf{Main File}: \texttt{GUI.py} contains all GUI and application logic
+    \item \textbf{Backend}: Database models and configuration in \texttt{backend/}
+    \item \textbf{Configuration}: Settings stored in JSON file
+    \item \textbf{Database}: SQLite for local data storage
+    \item \textbf{Hardware}: I2C/GPIO integration for Raspberry Pi
+    \item \textbf{Threading}: Background measurement thread with thread-safe GUI updates
+    \item \textbf{Visualization}: Real-time graphs using Matplotlib
+\end{itemize}
+
+The code is designed for maintainability, with clear separation between GUI, database, and hardware control components. The modular structure makes it easy to understand, modify, and extend functionality.
+
+\end{document}
