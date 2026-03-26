@@ -1,0 +1,177 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{array}
+\usepackage{longtable}
+
+\title{Benchmark Report: Transmission-Matrix Integration for SPAM}
+\author{SPAM Project}
+\date{2026-03-26}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents fresh benchmark results for the SPAM transmission-matrix pipeline, including (i) forward-path validation against simulated datasets and (ii) inverse extraction performance using progressive optimization. Benchmarks were rerun on the current codebase and captured as reproducibility artifacts. The forward path shows low relative transmission-matrix error across 10 simulation cases (mean-of-means \(9.643\times 10^{-4}\), worst-case maximum \(4.535\times 10^{-3}\)). The inverse path converges to low fit error across isotropic, diagonal, and symmetric targets (mean fit error \(6.093\times 10^{-4}\), total elapsed time 33.8 s on the benchmark host). Symmetric extraction attains low fit error but exhibits larger parameter deviation, indicating expected nonconvex sensitivity for higher-order tensor recovery.
+\end{abstract}
+
+\section{System and Mathematical Background}
+
+The implemented pipeline evaluates anisotropic material parameters from SPAM measurements using two coupled models:
+\begin{enumerate}
+    \item \textbf{Measurement path}: convert measured S-parameters to a normalized transmission matrix \(T_{\text{meas}}\).
+    \item \textbf{Forward model}: map candidate tensor parameters to theoretical transmission matrix \(T_{\text{theory}}\).
+\end{enumerate}
+
+At each incidence angle \(\theta\), the solver minimizes discrepancy between measured and theoretical transmission matrices over parameter vector \(x\):
+\begin{equation}
+    x^\star = \arg\min_x \; \frac{1}{N_\theta}\sum_{i=1}^{N_\theta}
+    \left\| T_{\text{meas}}(\theta_i)-T_{\text{theory}}(x,\theta_i)\right\|_F .
+\end{equation}
+
+Inverse extraction is performed progressively (isotropic \(\rightarrow\) diagonal \(\rightarrow\) symmetric), reducing sensitivity to poor initialization and improving convergence robustness.
+
+\section{Experimental Setup}
+
+\subsection{Code and Scripts}
+\begin{itemize}
+    \item Forward validation script: \texttt{test\_spam\_calc.py}
+    \item Inverse validation script: \texttt{test\_optimizer.py}
+    \item Core math: \texttt{spam\_calc.py}
+    \item Optimizer: \texttt{spam\_optimizer.py}
+\end{itemize}
+
+\subsection{Data and Conditions}
+\begin{itemize}
+    \item Dataset directory: \texttt{Simulated Spam Calculations/}
+    \item Frequency: \SI{24}{\giga\hertz}
+    \item Slab thickness: 60 mil
+    \item Angle grid: 44 points (\(2^\circ\) to \(88^\circ\))
+\end{itemize}
+
+\subsection{Execution Environment}
+\begin{itemize}
+    \item OS: Windows 11 (build 10.0.26200)
+    \item Python: 3.14.2 (64-bit)
+    \item CPU: AMD64 Family 25 Model 80
+\end{itemize}
+
+\subsection{Reproducibility Artifacts}
+\begin{itemize}
+    \item \texttt{benchmark\_artifacts/environment.txt}
+    \item \texttt{benchmark\_artifacts/test\_spam\_calc\_output.txt}
+    \item \texttt{benchmark\_artifacts/test\_optimizer\_output.txt}
+    \item \texttt{benchmark\_results.md}
+\end{itemize}
+
+\section{Benchmark Methodology}
+
+\subsection{Forward-path benchmark}
+For each simulated dataset, the script computes:
+\begin{enumerate}
+    \item \(T_{\text{meas}} \leftarrow \texttt{spam\_s\_to\_tmatrix}(S,\theta)\)
+    \item \(T_{\text{theory}} \leftarrow \texttt{material\_to\_tmatrix}(\epsilon_r,\mu_r,\theta,k_0d)\)
+    \item Relative matrix error over angles using \texttt{tmatrix\_error}
+\end{enumerate}
+Reported statistics are mean and maximum relative error per dataset.
+
+\subsection{Inverse benchmark}
+Three representative cases are solved using
+\texttt{extract\_material\_progressive} with \texttt{max\_iter\_per\_stage = 2000}. Reported statistics are fit error, maximum componentwise \(|\epsilon_r|\) deviation, maximum componentwise \(|\mu_r|\) deviation, and elapsed time.
+
+\section{Results}
+
+\subsection{Forward-path validation results}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.49\linewidth} S[table-format=1.6] S[table-format=1.6]}
+\caption{Forward-path transmission-matrix benchmark results.} \label{tab:forward-results} \\
+\toprule
+Dataset & {Mean relative error} & {Max relative error} \\
+\midrule
+\endfirsthead
+\toprule
+Dataset & {Mean relative error} & {Max relative error} \\
+\midrule
+\endhead
+\texttt{SPAM\_Scat\_Mat\_er2\_mur3} & 0.001484 & 0.003479 \\
+\texttt{SPAM\_Scat\_Mat\_er225\_mur333} & 0.000689 & 0.002004 \\
+\texttt{SPAM\_Scat\_Mat\_er225\_mur343} & 0.000707 & 0.002011 \\
+\texttt{SPAM\_Scat\_Mat\_er201205\_mur343} & 0.000684 & 0.001971 \\
+\texttt{SPAM\_Scat\_Mat\_er210205\_mur343} & 0.000742 & 0.001926 \\
+\texttt{SPAM\_Scat\_Mat\_er200215\_mur343} & 0.000529 & 0.001520 \\
+\texttt{SPAM\_Scat\_Mat\_er201205\_allj\_mur343\_allj} & 0.001777 & 0.003064 \\
+\texttt{SPAM\_Scat\_Mat\_erfull\_murdiag} & 0.000753 & 0.001964 \\
+\texttt{SPAM\_Scat\_Mat\_erfull\_murfull} & 0.000609 & 0.002027 \\
+\texttt{SPAM\_Scat\_Mat\_erfull\_murfull\_cutoff} & 0.001669 & 0.004535 \\
+\bottomrule
+\end{longtable}
+
+Aggregate forward metrics:
+\begin{itemize}
+    \item Mean of per-case mean errors: \(9.643\times 10^{-4}\)
+    \item Worst-case maximum error: \(4.535\times 10^{-3}\)
+\end{itemize}
+
+\subsection{Inverse extraction benchmark results}
+
+\begin{table}[h]
+\centering
+\caption{Inverse extraction benchmark results.}
+\label{tab:inverse-results}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.46\linewidth} S[table-format=1.6] S[table-format=1.4] S[table-format=1.4] S[table-format=2.1]}
+\toprule
+Test case & {Fit error} & {Max \(|\epsilon_r|\) error} & {Max \(|\mu_r|\) error} & {Elapsed (s)} \\
+\midrule
+Isotropic (\texttt{er2\_mur3} \(\rightarrow\) diagonal) & 0.000842 & 0.0031 & 0.0100 & 7.1 \\
+Diagonal (\texttt{er225\_mur343} \(\rightarrow\) diagonal) & 0.000438 & 0.0331 & 0.0058 & 9.0 \\
+Symmetric (\texttt{erfull\_murdiag} \(\rightarrow\) symmetric) & 0.000548 & 1.3861 & 0.8351 & 17.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Aggregate inverse metrics:
+\begin{itemize}
+    \item Mean fit error across three cases: \(6.093\times 10^{-4}\)
+    \item Total elapsed time across three cases: \SI{33.8}{s}
+\end{itemize}
+
+\section{Discussion}
+
+The forward benchmark confirms strong agreement between measured-path and forward-model transmission matrices across the full simulation suite. Error magnitudes remain below \(5\times 10^{-3}\) in all tested datasets.
+
+For inverse extraction, fit error remains low across all benchmark cases, including the symmetric target. However, parameter deviation is substantially larger in the symmetric case than in isotropic/diagonal cases. This is consistent with the increased dimensionality and nonconvexity of the symmetric tensor estimation problem: multiple parameter configurations can yield similarly low matrix fit error.
+
+From an operational standpoint, the measured benchmark timing remains suitable for desktop use. The same methodology can be repeated on Raspberry Pi hardware for direct platform-specific runtime characterization.
+
+\section{Threats to Validity and Limitations}
+
+\begin{itemize}
+    \item Benchmarks use simulated datasets; real measurement noise and calibration imperfections may shift extraction behavior.
+    \item Fit error alone does not guarantee physically meaningful parameters in higher-dimensional tensor models.
+    \item Runtime values are host-dependent and should not be transferred directly to other platforms without rerun.
+\end{itemize}
+
+\section{Conclusion and Next Steps}
+
+Fresh rerun benchmarks on the current codebase confirm:
+\begin{enumerate}
+    \item Low forward-path transmission-matrix error over 10 simulation datasets.
+    \item Stable low fit error for progressive inverse extraction across representative targets.
+    \item Expected sensitivity increase for symmetric-tensor parameter recovery despite low fit error.
+\end{enumerate}
+
+Recommended next step is a calibrated real-data benchmark campaign against a known reference sample, reported with the same table structure used in this document.
+
+\section*{How to Compile in Overleaf}
+
+\begin{itemize}
+    \item Upload this file as \texttt{benchmark\_report.tex}.
+    \item Use \texttt{pdfLaTeX} compiler (default Overleaf settings are sufficient).
+    \item No external bibliography or custom style files are required.
+\end{itemize}
+
+\end{document}

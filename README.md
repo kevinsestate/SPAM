@@ -22,16 +22,35 @@ A local desktop application for scanning and analyzing polarized anisotropic mat
 
 ```
 SPAM/
-├── GUI.py                 # Main application (standalone desktop app)
-├── requirements.txt       # Python dependencies
-├── start_spam.sh         # Startup script for Linux/Raspberry Pi
-├── start_spam.bat        # Startup script for Windows
+├── GUI.py                  # Main desktop application
+├── spam_calc.py            # Transmission-matrix math (forward + S->T)
+├── spam_optimizer.py       # Progressive inverse extraction
+├── requirements.txt        # Python dependencies
+├── start_spam.sh           # Startup script for Linux/Raspberry Pi
+├── start_spam.bat          # Startup script for Windows
+├── test_spam_calc.py       # T-matrix validation tests
+├── test_optimizer.py       # Extraction validation tests
 ├── backend/
-│   ├── database.py       # Database configuration
-│   ├── models.py         # SQLAlchemy models
-│   └── schemas.py        # Data schemas (for reference)
+│   ├── database.py         # Database configuration
+│   └── models.py           # SQLAlchemy models
+├── hardware/
+│   ├── ad7193.py          # AD7193 ADC driver
+│   ├── rf_switch.py       # RF switch controller
+│   └── __init__.py
+├── Simulated Spam Calculations/
+│   ├── *.mat              # Simulated validation datasets
+│   └── *.m                # MATLAB reference scripts
+├── INTEGRATION_TEST_RESULTS.md
+├── TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md
+├── archive/
+│   └── legacy/            # Non-active archived artifacts
 └── README.md
 ```
+
+### Active vs Archive
+
+- **Active runtime/test path**: `GUI.py`, `spam_calc.py`, `spam_optimizer.py`, `backend/`, `hardware/`, startup scripts, and tests.
+- **Archive path**: `archive/legacy/` contains non-active or superseded artifacts kept for reference (not used by launch scripts).
 
 ## Installation
 

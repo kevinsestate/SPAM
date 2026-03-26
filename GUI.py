@@ -8,6 +8,7 @@ from datetime import datetime
 import threading
 import time
 import platform
+import math
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -26,6 +27,7 @@ from models import Measurement, Calibration, ExtractionResult
 
 from spam_calc import compute_k0d, mil_to_m
 from spam_optimizer import extract_material_progressive
+from hardware import AD7193, RFSwitch
 
 # ---------------------------------------------------------------------------
 # Theme palettes
@@ -145,11 +147,22 @@ class SPAMGui(tk.Tk):
         self.motor_status_var = tk.StringVar(value="Not Initialized")
         self.motor_position_var = tk.StringVar(value="0.0\u00b0")
 
+        self.adc = None
+        self.rf_switch = None
+        self.rf_switch_enabled = str(self.connection_settings.get('enable_rf_switch', '0')).strip().lower() in ('1', 'true', 'yes', 'on')
+        self._adc_only_hint_logged = False
+
         self._last_graph_count = -1
 
-        self.extraction_f0_ghz = 24.0
-        self.extraction_d_mil = 60.0
-        self.extraction_tensor_type = "diagonal"
+        self.extraction_f0_ghz = self._safe_float(
+            self.connection_settings.get('extraction_f0_ghz', '24.0'), 24.0
+        )
+        self.extraction_d_mil = self._safe_float(
+            self.connection_settings.get('extraction_d_mil', '60.0'), 60.0
+        )
+        self.extraction_tensor_type = self.connection_settings.get('extraction_tensor_type', "diagonal")
+        if self.extraction_tensor_type not in ("isotropic", "diagonal", "symmetric"):
+            self.extraction_tensor_type = "diagonal"
         self.extraction_thread = None
         self.extraction_running = False
         self.extraction_status_var = tk.StringVar(value="Not Run")
@@ -157,8 +170,7 @@ class SPAMGui(tk.Tk):
         self.extraction_eps_var = tk.StringVar(value="--")
         self.extraction_mu_var = tk.StringVar(value="--")
 
-        if platform.system() == 'Linux':
-            self.after(200, self._initialize_motor_control)
+        self.after(200, self._initialize_hardware)
 
         self._configure_ttk_style()
         self._create_menu()
@@ -274,12 +286,14 @@ class SPAMGui(tk.Tk):
     # ------------------------------------------------------------------
     def _load_connection_settings(self):
         defaults = {
-            'i2c_bus': '1', 'adc_address': '0x48',
-            'if_i_channel': '0', 'if_q_channel': '1',
-            'sampling_rate': '1000', 'microcontroller_address': '0x55',
-            'isr_pin': '17', 'serial_port': 'COM1',
-            'baud_rate': '9600', 'timeout': '5.0',
-            'connection_type': 'I2C', 'theme': 'dark',
+            'spi_bus': '0', 'spi_cs': '0', 'spi_speed': '1000000',
+            'adc_gain': '1', 'adc_data_rate': '96',
+            'enable_rf_switch': '0',
+            'switch_gpio': '22',
+            'microcontroller_address': '0x55', 'isr_pin': '17',
+            'extraction_f0_ghz': '24.0', 'extraction_d_mil': '60.0',
+            'extraction_tensor_type': 'diagonal',
+            'theme': 'dark',
         }
         if os.path.exists(self.config_file):
             try:
@@ -297,6 +311,40 @@ class SPAMGui(tk.Tk):
         except Exception as e:
             self._log_debug(f"Error saving config: {e}", "WARNING")
 
+    def _safe_float(self, value, fallback):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _thickness_resonance_advisory(self, f0_ghz, d_mil):
+        """Advisory-only resonance sensitivity check from k0*d."""
+        f_hz = f0_ghz * 1e9
+        d_m = mil_to_m(d_mil)
+        k0d = compute_k0d(f_hz, d_m)
+        targets = [n * math.pi / 2.0 for n in range(1, 9)]
+        nearest = min(targets, key=lambda t: abs(k0d - t))
+        nearest_order = targets.index(nearest) + 1
+        dist = abs(k0d - nearest)
+
+        if dist < 0.08:
+            level = "warning"
+            msg = (
+                f"Thickness may be resonance-sensitive: k0d={k0d:.3f} is very close "
+                f"to {nearest_order}*pi/2 ({nearest:.3f}). Consider adjusting thickness."
+            )
+        elif dist < 0.18:
+            level = "warning"
+            msg = (
+                f"Thickness is near a resonance zone: k0d={k0d:.3f}, nearest "
+                f"{nearest_order}*pi/2={nearest:.3f}. Use caution and verify fit quality."
+            )
+        else:
+            level = "info"
+            msg = f"Thickness looks away from quarter-wave resonance zones (k0d={k0d:.3f})."
+
+        return {"level": level, "message": msg, "k0d": k0d}
+
     # ------------------------------------------------------------------
     # Background init
     # ------------------------------------------------------------------
@@ -312,51 +360,77 @@ class SPAMGui(tk.Tk):
     # ------------------------------------------------------------------
     # Motor control (unchanged logic, compact formatting)
     # ------------------------------------------------------------------
-    def _initialize_motor_control(self):
+    def _initialize_hardware(self):
+        # --- Motor control (Linux / Pi only) ---
         if platform.system() != 'Linux':
             self.motor_status_var.set("Not Available (Windows)")
-            return
-        try:
-            from smbus import SMBus
-            import RPi.GPIO as GPIO
-            i2c_bus_num = int(self.connection_settings.get('i2c_bus', '1'))
-            mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
-            isr_pin = int(self.connection_settings.get('isr_pin', '17'))
-            self.motor_bus = SMBus(i2c_bus_num)
+        else:
             try:
-                status = self.motor_bus.read_byte_data(mcu_address, 0x00)
-                self._log_debug(f"MCU at 0x{mcu_address:02X}, status=0x{status:02X}", "SUCCESS")
-            except Exception as e:
-                self._log_debug(f"MCU read warning: {e}", "WARNING")
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(isr_pin, GPIO.IN)
-            self.motor_gpio = GPIO
-            def handle_alert(channel):
+                from smbus import SMBus
+                import RPi.GPIO as GPIO
+                mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+                isr_pin = int(self.connection_settings.get('isr_pin', '17'))
+                self.motor_bus = SMBus(1)
                 try:
-                    st = self.motor_bus.read_byte_data(mcu_address, 0x00)
-                    if st & 0x01:
-                        self.motor_collision_detected = True
-                        self.after(0, lambda: self._log_debug("COLLISION DETECTED", "ERROR"))
-                        self.after(0, lambda: self.motor_status_var.set("COLLISION!"))
-                        if self.is_measuring:
-                            self.after(0, self._on_stop_measurement)
-                    if st & 0x02:
-                        self.motor_movement_status = True
-                        self.after(0, lambda: self.motor_status_var.set("Ready"))
+                    status = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    self._log_debug(f"MCU at 0x{mcu_address:02X}, status=0x{status:02X}", "SUCCESS")
                 except Exception as e:
-                    self.after(0, lambda: self._log_debug(f"Motor status error: {e}", "ERROR"))
-            GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
-            self.motor_control_enabled = True
-            self.motor_status_var.set("Ready")
-            self._log_debug("Motor control initialized", "SUCCESS")
-        except ImportError as e:
-            self.motor_status_var.set("Libraries N/A")
-            self._log_debug(f"Motor libs missing: {e}", "ERROR")
-            self.motor_control_enabled = False
+                    self._log_debug(f"MCU read warning: {e}", "WARNING")
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setup(isr_pin, GPIO.IN)
+                self.motor_gpio = GPIO
+                def handle_alert(channel):
+                    try:
+                        st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                        if st & 0x01:
+                            self.motor_collision_detected = True
+                            self.after(0, lambda: self._log_debug("COLLISION DETECTED", "ERROR"))
+                            self.after(0, lambda: self.motor_status_var.set("COLLISION!"))
+                            if self.is_measuring:
+                                self.after(0, self._on_stop_measurement)
+                        if st & 0x02:
+                            self.motor_movement_status = True
+                            self.after(0, lambda: self.motor_status_var.set("Ready"))
+                    except Exception as e:
+                        self.after(0, lambda: self._log_debug(f"Motor status error: {e}", "ERROR"))
+                GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
+                self.motor_control_enabled = True
+                self.motor_status_var.set("Ready")
+                self._log_debug("Motor control initialized", "SUCCESS")
+            except ImportError as e:
+                self.motor_status_var.set("Libraries N/A")
+                self._log_debug(f"Motor libs missing: {e}", "ERROR")
+                self.motor_control_enabled = False
+
+        # --- AD7193 ADC (Pmod AD5) ---
+        try:
+            spi_bus = int(self.connection_settings.get('spi_bus', '0'))
+            spi_cs = int(self.connection_settings.get('spi_cs', '0'))
+            spi_speed = int(self.connection_settings.get('spi_speed', '1000000'))
+            gain = int(self.connection_settings.get('adc_gain', '1'))
+            data_rate = int(self.connection_settings.get('adc_data_rate', '96'))
+            self.adc = AD7193(spi_bus, spi_cs, spi_speed, log_fn=self._log_debug)
+            self.adc.configure(gain=gain, data_rate=data_rate)
+            mode_str = "SIM" if self.adc.is_simulated else "SPI"
+            self._log_debug(f"ADC ready ({mode_str})", "SUCCESS")
         except Exception as e:
-            self.motor_status_var.set("Init Failed")
-            self._log_debug(f"Motor init failed: {e}", "ERROR")
-            self.motor_control_enabled = False
+            self._log_debug(f"ADC init failed: {e}", "ERROR")
+            self.adc = None
+
+        # --- RF Switch (optional) ---
+        self.rf_switch_enabled = str(self.connection_settings.get('enable_rf_switch', '0')).strip().lower() in ('1', 'true', 'yes', 'on')
+        if not self.rf_switch_enabled:
+            self.rf_switch = None
+            self._log_debug("RF switch control disabled (ADC-only mode)", "INFO")
+        else:
+            try:
+                sw_pin = int(self.connection_settings.get('switch_gpio', '22'))
+                self.rf_switch = RFSwitch(gpio_pin=sw_pin, log_fn=self._log_debug)
+                mode_str = "SIM" if self.rf_switch.is_simulated else "GPIO"
+                self._log_debug(f"RF switch ready ({mode_str})", "SUCCESS")
+            except Exception as e:
+                self._log_debug(f"RF switch init failed: {e}", "ERROR")
+                self.rf_switch = None
 
     def _send_motor_command(self, motor_num: int, position: float, command: int = 1) -> bool:
         if not self.motor_control_enabled or self.motor_bus is None:
@@ -598,6 +672,8 @@ class SPAMGui(tk.Tk):
         self.power_var = tk.StringVar(value="-10.0 dBm")
         self.angle_step_var = tk.StringVar(value="5.0\u00b0")
         self.interval_var = tk.StringVar(value="0.50 s")
+        self.thickness_var = tk.StringVar(value=f"{self.extraction_d_mil:.1f} mil")
+        self.extract_type_var = tk.StringVar(value=self.extraction_tensor_type)
         self.cal_error_var = tk.StringVar(value="0.00%")
         self.noise_var = tk.StringVar(value="0.0 dB")
 
@@ -620,6 +696,8 @@ class SPAMGui(tk.Tk):
             ("Fit Error", self.extraction_error_var),
             ("\u03b5r diag", self.extraction_eps_var),
             ("\u03bcr diag", self.extraction_mu_var),
+            ("Thickness (mil)", self.thickness_var),
+            ("Tensor Type", self.extract_type_var),
         ])
         section(inner, "Parameters", [
             ("Frequency", self.freq_var), ("Power", self.power_var),
@@ -873,6 +951,8 @@ class SPAMGui(tk.Tk):
         self.power_var.set(f"{self.power_level:.1f} dBm")
         self.angle_step_var.set(f"{self.angle_step:.1f}\u00b0")
         self.interval_var.set(f"{self.measurement_interval:.2f} s")
+        self.thickness_var.set(f"{self.extraction_d_mil:.1f} mil")
+        self.extract_type_var.set(self.extraction_tensor_type)
         if not self.is_measuring:
             self.calibration_error = 0.0
             self.noise_level = 0.0
@@ -899,15 +979,56 @@ class SPAMGui(tk.Tk):
                     else:
                         self.after(0, lambda: self._log_debug(f"Motor timeout at {self.current_angle:.2f}\u00b0", "WARNING"))
             import math
-            angle_rad = math.radians(self.current_angle)
-            transmitted_power = -20.0 * (self.current_angle / 90.0)
-            reflected_power = -15.0 - 10.0 * (self.current_angle / 90.0)
-            transmitted_phase = -90.0 + 180.0 * (self.current_angle / 90.0)
-            reflected_phase = -45.0 + 135.0 * (self.current_angle / 90.0)
+
+            if self.adc is not None:
+                # --- Real ADC reads ---
+                if self.adc.is_simulated:
+                    self.adc.set_sim_angle(self.current_angle)
+
+                if self.rf_switch is not None:
+                    # S21 (transmission): switch to RXt, read I/Q
+                    self.rf_switch.select_transmission()
+                    time.sleep(0.01)
+                    i_tx, q_tx = self.adc.read_iq()
+
+                    # S11 (reflection): switch to RXp, read I/Q
+                    self.rf_switch.select_reflection()
+                    time.sleep(0.01)
+                    i_rx, q_rx = self.adc.read_iq()
+                else:
+                    # ADC-only mode: expects path state to be handled externally.
+                    if not self._adc_only_hint_logged:
+                        self._adc_only_hint_logged = True
+                        self.after(0, lambda: self._log_debug(
+                            "ADC-only mode active: RF path switching is external/not app-controlled.",
+                            "INFO"
+                        ))
+                    i_tx, q_tx = self.adc.read_iq()
+                    time.sleep(0.01)
+                    i_rx, q_rx = self.adc.read_iq()
+
+                s21_mag = math.sqrt(i_tx**2 + q_tx**2)
+                s21_phase = math.degrees(math.atan2(q_tx, i_tx))
+                transmitted_power = 20.0 * math.log10(s21_mag) if s21_mag > 0 else -100.0
+                transmitted_phase = s21_phase
+
+                s11_mag = math.sqrt(i_rx**2 + q_rx**2)
+                s11_phase = math.degrees(math.atan2(q_rx, i_rx))
+                reflected_power = 20.0 * math.log10(s11_mag) if s11_mag > 0 else -100.0
+                reflected_phase = s11_phase
+            else:
+                # --- Simulation fallback (no hardware) ---
+                angle_rad = math.radians(self.current_angle)
+                transmitted_power = -20.0 * (self.current_angle / 90.0)
+                reflected_power = -15.0 - 10.0 * (self.current_angle / 90.0)
+                transmitted_phase = -90.0 + 180.0 * (self.current_angle / 90.0)
+                reflected_phase = -45.0 + 135.0 * (self.current_angle / 90.0)
+
             self.transmitted_power = transmitted_power
             self.reflected_power = reflected_power
             self.transmitted_phase = transmitted_phase
             self.reflected_phase = reflected_phase
+            angle_rad = math.radians(self.current_angle)
             permittivity = 2.0 + 0.1 * math.sin(angle_rad)
             permeability = 1.5 + 0.05 * math.cos(angle_rad)
             self._create_measurement(self.current_angle, permittivity, permeability,
@@ -969,7 +1090,7 @@ class SPAMGui(tk.Tk):
             k0d = compute_k0d(f_hz, d_m)
             self.after(0, lambda: self._log_debug(
                 f"Extraction: f0={self.extraction_f0_ghz}GHz d={self.extraction_d_mil}mil "
-                f"type={self.extraction_tensor_type} {n} angles", "INFO"))
+                f"k0d={k0d:.4f} type={self.extraction_tensor_type} {n} angles", "INFO"))
             def stage_update(stage, res):
                 self.after(0, lambda s=stage, e=res['fit_error']:
                     self._log_debug(f"  [{s}] error={e:.6f}", "INFO"))
@@ -979,18 +1100,31 @@ class SPAMGui(tk.Tk):
                     target_type=self.extraction_tensor_type, max_iter_per_stage=2000,
                     callback=stage_update)
             erv, mrv, fit_err = result["erv"], result["mrv"], result["fit_error"]
-            eps_d = f"[{erv[0].real:.2f}, {erv[3].real:.2f}, {erv[5].real:.2f}]"
-            mu_d = f"[{mrv[0].real:.2f}, {mrv[3].real:.2f}, {mrv[5].real:.2f}]"
-            self.after(0, lambda: self.extraction_status_var.set("Done"))
-            self.after(0, lambda: self.extraction_error_var.set(f"{fit_err:.6f}"))
-            self.after(0, lambda e=eps_d: self.extraction_eps_var.set(e))
-            self.after(0, lambda m=mu_d: self.extraction_mu_var.set(m))
-            self.after(0, lambda: self._log_debug(f"Extraction done: error={fit_err:.6f}", "SUCCESS"))
-            self._save_extraction_result(result)
+
+            if not np.isfinite(fit_err) or fit_err > 1.0:
+                self.after(0, lambda: self.extraction_status_var.set("No Converge"))
+                self.after(0, lambda: self.extraction_error_var.set("--"))
+                self.after(0, lambda: self.extraction_eps_var.set("--"))
+                self.after(0, lambda: self.extraction_mu_var.set("--"))
+                self.after(0, lambda: self._log_debug(
+                    "Extraction did not converge -- simulated/placeholder data is not "
+                    "valid S-parameter data. Will work with real hardware measurements.", "WARNING"))
+            else:
+                eps_d = f"[{erv[0].real:.2f}, {erv[3].real:.2f}, {erv[5].real:.2f}]"
+                mu_d = f"[{mrv[0].real:.2f}, {mrv[3].real:.2f}, {mrv[5].real:.2f}]"
+                self.after(0, lambda: self.extraction_status_var.set("Done"))
+                self.after(0, lambda: self.extraction_error_var.set(f"{fit_err:.6f}"))
+                self.after(0, lambda e=eps_d: self.extraction_eps_var.set(e))
+                self.after(0, lambda m=mu_d: self.extraction_mu_var.set(m))
+                self.after(0, lambda: self._log_debug(f"Extraction done: error={fit_err:.6f}", "SUCCESS"))
+                self._save_extraction_result(result)
         except Exception as exc:
+            import traceback
             err_msg = str(exc)
+            tb_msg = traceback.format_exc()
             self.after(0, lambda: self.extraction_status_var.set("Error"))
             self.after(0, lambda m=err_msg: self._log_debug(f"Extraction failed: {m}", "ERROR"))
+            self.after(0, lambda m=tb_msg: self._log_debug(f"Traceback:\n{m}", "ERROR"))
         finally:
             self.extraction_running = False
 
@@ -1002,7 +1136,11 @@ class SPAMGui(tk.Tk):
                                    fit_error=float(result["fit_error"]),
                                    tensor_type=self.extraction_tensor_type,
                                    config_json={"f0_ghz": self.extraction_f0_ghz,
-                                                "d_mil": self.extraction_d_mil})
+                                                "d_mil": self.extraction_d_mil,
+                                                "k0d": compute_k0d(
+                                                    self.extraction_f0_ghz * 1e9,
+                                                    mil_to_m(self.extraction_d_mil)
+                                                )})
             self.db.add(rec)
             self.db.commit()
         except Exception as exc:
@@ -1039,7 +1177,7 @@ class SPAMGui(tk.Tk):
     # Extraction settings dialog
     # ------------------------------------------------------------------
     def _on_extraction_settings(self):
-        d = self._themed_dialog("Extraction Settings", 400, 280)
+        d = self._themed_dialog("Extraction Settings", 430, 360)
         tk.Label(d, text="Material Extraction Settings", bg=self._t('bg'),
                  fg=self._t('text'), font=(_FONT, 12, "bold")).pack(pady=(16, 12))
         content = tk.Frame(d, bg=self._t('bg_panel'), padx=16, pady=16)
@@ -1049,23 +1187,55 @@ class SPAMGui(tk.Tk):
         d_var = tk.StringVar(value=str(self.extraction_d_mil))
         type_var = tk.StringVar(value=self.extraction_tensor_type)
         self._dialog_entry_row(content, "Frequency (GHz):", f0_var, 0)
-        self._dialog_entry_row(content, "Thickness (mil):", d_var, 1)
+        self._dialog_entry_row(content, "Thickness (mil, 1-500):", d_var, 1)
+        tk.Label(content,
+                 text="Advisory: choose thickness to avoid resonance-sensitive regimes.",
+                 bg=self._t('bg_panel'), fg=self._t('text_sec'), font=(_FONT, 8),
+                 anchor="w").grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
         tk.Label(content, text="Tensor Type:", bg=self._t('bg_panel'), fg=self._t('text'),
-                 font=(_FONT, 9)).grid(row=2, column=0, sticky="w", pady=6, padx=(0, 8))
+                 font=(_FONT, 9)).grid(row=3, column=0, sticky="w", pady=6, padx=(0, 8))
         ttk.Combobox(content, textvariable=type_var, state="readonly",
                      values=["isotropic", "diagonal", "symmetric"],
-                     width=17).grid(row=2, column=1, sticky="ew", pady=6)
+                     width=17).grid(row=3, column=1, sticky="ew", pady=6)
         def save():
             try:
-                self.extraction_f0_ghz = float(f0_var.get())
-                self.extraction_d_mil = float(d_var.get())
-                self.extraction_tensor_type = type_var.get()
-                self._log_debug(f"Extraction: f0={self.extraction_f0_ghz} d={self.extraction_d_mil} type={self.extraction_tensor_type}", "INFO")
+                f0_ghz = float(f0_var.get())
+                d_mil = float(d_var.get())
+                tensor_type = type_var.get()
+                if f0_ghz <= 0:
+                    raise ValueError("Frequency must be greater than 0 GHz.")
+                if d_mil < 1 or d_mil > 500:
+                    raise ValueError("Thickness must be between 1 and 500 mil.")
+                if tensor_type not in ("isotropic", "diagonal", "symmetric"):
+                    raise ValueError("Tensor type must be isotropic, diagonal, or symmetric.")
+
+                self.extraction_f0_ghz = f0_ghz
+                self.extraction_d_mil = d_mil
+                self.extraction_tensor_type = tensor_type
+
+                self.connection_settings['extraction_f0_ghz'] = str(self.extraction_f0_ghz)
+                self.connection_settings['extraction_d_mil'] = str(self.extraction_d_mil)
+                self.connection_settings['extraction_tensor_type'] = self.extraction_tensor_type
+                self._save_connection_settings()
+
+                advisory = self._thickness_resonance_advisory(self.extraction_f0_ghz, self.extraction_d_mil)
+                self._log_debug(
+                    f"Extraction settings saved: f0={self.extraction_f0_ghz:.3f}GHz "
+                    f"d={self.extraction_d_mil:.2f}mil k0d={advisory['k0d']:.4f} "
+                    f"type={self.extraction_tensor_type}",
+                    "INFO"
+                )
+                self._log_debug(advisory["message"], "WARNING" if advisory["level"] == "warning" else "INFO")
+                if advisory["level"] == "warning":
+                    messagebox.showwarning("Thickness Advisory", advisory["message"], parent=d)
+                    self._update_status("Extraction settings saved (advisory issued)", "warning")
+                else:
+                    self._update_status("Extraction settings saved", "success")
                 d.destroy()
-            except ValueError:
-                messagebox.showerror("Error", "Enter valid numbers.", parent=d)
+            except ValueError as e:
+                messagebox.showerror("Invalid Extraction Settings", str(e), parent=d)
         bf = tk.Frame(content, bg=self._t('bg_panel'))
-        bf.grid(row=3, column=0, columnspan=2, pady=(12, 0), sticky="e")
+        bf.grid(row=4, column=0, columnspan=2, pady=(12, 0), sticky="e")
         self._make_btn(bf, "Cancel", d.destroy, "ghost").pack(side=tk.RIGHT, padx=(4, 0))
         self._make_btn(bf, "Save", save, "accent").pack(side=tk.RIGHT)
 
@@ -1106,38 +1276,70 @@ class SPAMGui(tk.Tk):
     # Connection setup dialog
     # ------------------------------------------------------------------
     def _on_connection_setup(self):
-        d = self._themed_dialog("Connection Setup", 500, 520)
+        d = self._themed_dialog("Connection Setup", 500, 560)
         tk.Label(d, text="Connection Configuration", bg=self._t('bg'),
                  fg=self._t('text'), font=(_FONT, 12, "bold")).pack(pady=(16, 12))
         content = tk.Frame(d, bg=self._t('bg_panel'), padx=16, pady=12)
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
         content.columnconfigure(1, weight=1)
         vars_ = {}
-        fields = [("I2C Bus:", 'i2c_bus'), ("ADC Address:", 'adc_address'),
-                  ("IF-I Channel:", 'if_i_channel'), ("IF-Q Channel:", 'if_q_channel'),
-                  ("Sample Rate:", 'sampling_rate'), ("MCU Address:", 'microcontroller_address'),
-                  ("ISR Pin:", 'isr_pin'), ("Serial Port:", 'serial_port'),
-                  ("Baud Rate:", 'baud_rate'), ("Timeout (s):", 'timeout')]
-        for i, (lbl, key) in enumerate(fields):
+
+        row = 0
+        def section_label(text, r):
+            tk.Label(content, text=text, bg=self._t('bg_panel'),
+                     fg=self._t('accent'), font=(_FONT, 9, "bold")).grid(
+                row=r, column=0, columnspan=2, sticky="w", pady=(8 if r > 0 else 0, 4))
+            return r + 1
+
+        row = section_label("ADC (AD7193 / Pmod AD5)", row)
+        for lbl, key in [("SPI Bus:", 'spi_bus'), ("SPI CS:", 'spi_cs'),
+                         ("SPI Speed (Hz):", 'spi_speed'), ("ADC Gain:", 'adc_gain'),
+                         ("Data Rate (Hz):", 'adc_data_rate')]:
             v = tk.StringVar(value=self.connection_settings.get(key, ''))
             vars_[key] = v
-            self._dialog_entry_row(content, lbl, v, i)
+            self._dialog_entry_row(content, lbl, v, row)
+            row += 1
+
+        row = section_label("RF Switch", row)
+        for lbl, key in [("Enable RF Switch Control (0/1):", 'enable_rf_switch'),
+                         ("Switch GPIO Pin:", 'switch_gpio')]:
+            v = tk.StringVar(value=self.connection_settings.get(key, ''))
+            vars_[key] = v
+            self._dialog_entry_row(content, lbl, v, row)
+            row += 1
+
+        row = section_label("Motor Controller", row)
+        for lbl, key in [("MCU Address:", 'microcontroller_address'),
+                         ("ISR Pin:", 'isr_pin')]:
+            v = tk.StringVar(value=self.connection_settings.get(key, ''))
+            vars_[key] = v
+            self._dialog_entry_row(content, lbl, v, row)
+            row += 1
+
         def save():
             for key, v in vars_.items():
                 self.connection_settings[key] = v.get().strip()
             self._save_connection_settings()
             self._log_debug("Connection settings saved", "SUCCESS")
             self._update_status("Connection saved", "success")
-            if platform.system() == 'Linux':
-                if self.motor_gpio:
-                    try: self.motor_gpio.cleanup()
-                    except: pass
-                if self.motor_bus:
-                    try: self.motor_bus.close()
-                    except: pass
-                self.motor_control_enabled = False
-                self.motor_bus = None
-                self.after(200, self._initialize_motor_control)
+            # Tear down existing hardware and re-initialize
+            if self.motor_gpio:
+                try: self.motor_gpio.cleanup()
+                except: pass
+            if self.motor_bus:
+                try: self.motor_bus.close()
+                except: pass
+            self.motor_control_enabled = False
+            self.motor_bus = None
+            if self.adc:
+                try: self.adc.close()
+                except: pass
+                self.adc = None
+            if self.rf_switch:
+                try: self.rf_switch.close()
+                except: pass
+                self.rf_switch = None
+            self.after(200, self._initialize_hardware)
             d.destroy()
         bf = tk.Frame(d, bg=self._t('bg'))
         bf.pack(fill=tk.X, padx=16, pady=(0, 16))
@@ -1306,6 +1508,12 @@ class SPAMGui(tk.Tk):
         self.is_measuring = False
         if self.motor_gpio:
             try: self.motor_gpio.cleanup()
+            except: pass
+        if self.adc:
+            try: self.adc.close()
+            except: pass
+        if self.rf_switch:
+            try: self.rf_switch.close()
             except: pass
         if hasattr(self, 'db'):
             self.db.close()

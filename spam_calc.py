@@ -317,7 +317,16 @@ def spam_s_to_tmatrix(S_SPAM, theta_deg):
     bot[:, 2:4, 0:2] = s21
     bot[:, 2:4, 2:4] = -I2 + s22
 
-    M = top @ np.linalg.inv(bot)                       # (Ntheta, 4, 4)
+    try:
+        M = top @ np.linalg.inv(bot)                   # (Ntheta, 4, 4)
+    except np.linalg.LinAlgError:
+        bot_inv = np.empty_like(bot)
+        for ti in range(Ntheta):
+            try:
+                bot_inv[ti] = np.linalg.inv(bot[ti])
+            except np.linalg.LinAlgError:
+                bot_inv[ti] = np.linalg.pinv(bot[ti])
+        M = top @ bot_inv
 
     yy = np.stack([ones, ones, st, ct], axis=1)
     zz = np.stack([ones, ones, ct, st], axis=1)
