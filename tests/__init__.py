@@ -1,0 +1,1 @@
+"""SPAM test suite."""

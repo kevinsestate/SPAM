@@ -3,7 +3,7 @@ SQLAlchemy models for SPAM application.
 """
 from sqlalchemy import Column, Integer, Float, DateTime, String, JSON
 from sqlalchemy.sql import func
-from database import Base
+from .database import Base
 
 
 class Measurement(Base):

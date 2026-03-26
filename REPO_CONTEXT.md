@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-03-26
+Last updated: 2026-03-26 (post-refactor)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -31,10 +31,12 @@ Runtime entrypoints:
 - `start_spam.sh` (Linux/Raspberry Pi) -> launches `python3 GUI.py`
 
 Active runtime path:
-- Main app: `GUI.py`
-- Core extraction math: `spam_calc.py`, `spam_optimizer.py`
-- Persistence: `backend/`
+- Main app: `GUI.py` -> `app.py` (thin entry point delegates to mixin-assembled `SPAMGui`)
+- GUI mixins: `gui/` (widgets, config, hardware, measurement, extraction, graphs, callbacks, panels/, dialogs/)
+- Core extraction math: `core/spam_calc.py`, `core/spam_optimizer.py` (root shims for backward compat)
+- Persistence: `backend/` (relative imports, re-exports from `__init__.py`)
 - Hardware integration: `hardware/`
+- Tests: `tests/`
 
 ---
 
@@ -42,20 +44,28 @@ Active runtime path:
 
 ### Core modules
 
-- `GUI.py`
-  - UI, measurement loop, extraction trigger, settings dialogs, debug logs.
-  - Stores extraction settings in `spam_config.json` via `connection_settings`.
-- `spam_calc.py`
-  - Forward model and S->T conversion:
-    - `material_to_tmatrix`
-    - `spam_s_to_tmatrix`
-    - `tmatrix_error`
-    - `compute_k0d`, `mil_to_m`
-- `spam_optimizer.py`
-  - Progressive inverse extraction:
-    - isotropic -> diagonal -> symmetric (`extract_material_progressive`)
+- `GUI.py` -> `app.py`
+  - `GUI.py` is now a thin entry point that imports from `app.py`.
+  - `app.py` assembles `SPAMGui` from mixin classes in `gui/`.
+- `gui/` package (mixin-based architecture):
+  - `themes.py` - Theme palettes and font constants
+  - `widgets.py` - Styled widget factory (WidgetsMixin)
+  - `config.py` - Config persistence (ConfigMixin)
+  - `hardware_mixin.py` - Hardware init and motor control (HardwareMixin)
+  - `db_helpers.py` - Database CRUD helpers (DBMixin)
+  - `measurement.py` - Measurement sweep worker (MeasurementMixin)
+  - `extraction.py` - Material extraction worker (ExtractionMixin)
+  - `graphs.py` - Center panel graphs (GraphsMixin)
+  - `callbacks.py` - Status, calibrate, export, help (CallbacksMixin)
+  - `debug_console.py` - Standalone DebugConsole Toplevel
+  - `panels/` - menu.py, status_bar.py, sidebar.py, detail_panel.py
+  - `dialogs/` - base.py, extraction_dlg.py, parameters_dlg.py, connection_dlg.py
+- `core/` package:
+  - `spam_calc.py` - Forward model and S->T conversion
+  - `spam_optimizer.py` - Progressive inverse extraction
+  - Root-level `spam_calc.py` and `spam_optimizer.py` are backward-compat shims.
 - `backend/database.py`, `backend/models.py`
-  - SQLite models for measurements/calibration/extraction results.
+  - SQLite models; uses relative imports; `backend/__init__.py` re-exports public API.
 - `hardware/ad7193.py`, `hardware/rf_switch.py`
   - ADC and switch control with simulation fallback.
 
@@ -108,8 +118,8 @@ Reference:
 
 ### Active vs archived
 
-- Active code/data paths are in root + `backend/` + `hardware/` + `Simulated Spam Calculations/`.
-- Archived non-active artifacts are under `archive/legacy/` and are not launch targets.
+- Active code/data paths are in root + `core/` + `gui/` + `backend/` + `hardware/` + `tests/` + `Simulated Spam Calculations/`.
+- Archived non-active artifacts are under `archive/legacy/` (includes `motor_control_status.py`) and are not launch targets.
 
 ---
 
@@ -130,8 +140,8 @@ Linux/RPi:
 ### Run extraction benchmarks
 
 ```powershell
-python test_spam_calc.py
-python test_optimizer.py
+python tests/test_spam_calc.py
+python tests/test_optimizer.py
 ```
 
 ### Benchmark/report artifacts
@@ -143,6 +153,21 @@ python test_optimizer.py
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-03-26 - GUI split refactor + modular architecture
+- Changed:
+  - Split monolithic `GUI.py` (1751 lines) into mixin classes under `gui/` package
+  - Moved `spam_calc.py` and `spam_optimizer.py` into `core/` package with root shims
+  - Fixed `backend/models.py` to use relative imports; added re-exports in `backend/__init__.py`
+  - Created `app.py` to assemble `SPAMGui` from mixins; `GUI.py` is now thin entry point
+  - Moved tests to `tests/` directory with updated imports
+  - Moved `motor_control_status.py` to `archive/legacy/`
+- Verified:
+  - All files created with correct imports and structure
+  - Launch scripts unchanged (`start_spam.bat`/`.sh` still target `GUI.py`)
+- Risks/follow-up:
+  - Smoke test all imports and run test suite to confirm no regressions
+  - Theme hot-reload still requires restart (unchanged behavior)
 
 ### 2026-03-26 - Added benchmark report package and fresh reruns
 - Changed:
@@ -188,7 +213,8 @@ python test_optimizer.py
 
 ## Open Issues / Next Priorities
 
-1. Perform full Raspberry Pi hardware-in-loop validation for AD7193 + RF switch.
-2. Validate extraction against calibrated real material reference sample(s).
-3. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
-4. Keep this file updated after each substantial task.
+1. Run smoke test on all imports and test suite to verify refactor integrity.
+2. Perform full Raspberry Pi hardware-in-loop validation for AD7193 + RF switch.
+3. Validate extraction against calibrated real material reference sample(s).
+4. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
+5. Keep this file updated after each substantial task.
