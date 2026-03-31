@@ -38,6 +38,7 @@ _COMM_WRITE = 0x00  # Write operation
 _MODE_SINGLE = 0x200000  # Single conversion mode
 _MODE_IDLE   = 0x400000  # Idle mode
 _MODE_CONT   = 0x000000  # Continuous conversion mode
+_MODE_CLK_INT = 0x080000  # CLK1=1, CLK0=0 (internal 4.92 MHz clock)
 
 # Config register bits
 _CONFIG_CHOP_DIS = 0x000000  # Chop disabled
@@ -160,7 +161,7 @@ class AD7193:
         fs_val = max(1, min(1023, int(4_800_000 / (128 * data_rate))))
 
         # Mode register: single conversion, internal clock, no averaging
-        mode_val = _MODE_SINGLE | (fs_val & 0x3FF)
+        mode_val = _MODE_SINGLE | _MODE_CLK_INT | (fs_val & 0x3FF)
         self._write_reg(_REG_MODE, mode_val, 3)
 
         # Config register: channel selection done per-read, gain, buffered, differential
@@ -197,7 +198,7 @@ class AD7193:
 
         # Start single conversion
         fs_val = max(1, min(1023, int(4_800_000 / (128 * self._data_rate))))
-        mode_val = _MODE_SINGLE | (fs_val & 0x3FF)
+        mode_val = _MODE_SINGLE | _MODE_CLK_INT | (fs_val & 0x3FF)
         self._write_reg(_REG_MODE, mode_val, 3)
 
         # Wait for conversion (poll status register RDY bit)
