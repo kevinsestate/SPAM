@@ -51,7 +51,7 @@ _GAIN_MAP = {1: 0, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7}
 # Differential channel pairs on AD7193:
 # Ch0 = AIN1+ / AIN1-  (IF-I)
 # Ch1 = AIN2+ / AIN2-  (IF-Q)
-_DIFF_CH = {0: 0x0100, 1: 0x0200}
+_DIFF_CH = {0: 0x0001, 1: 0x0002}
 
 # Reference voltage (Pmod AD5 uses external 2.5V reference)
 _VREF = 2.5
@@ -126,9 +126,9 @@ class AD7193:
         if self._sim:
             return
         id_val = self._read_reg(_REG_ID, 1)
-        # AD7193 ID should have bits [7:4] = 0x2
-        if (id_val >> 4) != 0x2:
-            self._log(f"AD7193: unexpected ID=0x{id_val:02X} (expected 0x2x)", "WARNING")
+        # AD7193 ID reset value is 0xX2 (low nibble fixed to 0x2).
+        if (id_val & 0x0F) != 0x02:
+            self._log(f"AD7193: unexpected ID=0x{id_val:02X} (expected 0xX2)", "WARNING")
         else:
             self._log(f"AD7193: ID=0x{id_val:02X} verified", "INFO")
 
