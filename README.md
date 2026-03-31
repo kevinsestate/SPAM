@@ -10,6 +10,22 @@ A local desktop application for scanning and analyzing polarized anisotropic mat
 - **Data Export**: Export measurements in JSON or CSV format
 - **Modern GUI**: Desktop interface built with Tkinter and Matplotlib
 
+## Current Implementation Status
+
+- **AD7193 on Raspberry Pi**: SPI bring-up is working (`ID=0xA2` and finite I/Q reads).
+- **GUI ADC-only flow**: Operational for measurement runs without motor/RF switch control.
+- **Motor dependency**: Optional for ADC bring-up; missing motor libs do not block ADC validation.
+- **Extraction boundary (important)**: Voltage-to-calibrated-S-parameter math is still pending teammate implementation.
+
+### What Is Provisional vs Final
+
+- **Final/validated now**
+  - AD7193 low-level SPI communication and channel reads.
+  - End-to-end GUI acquisition path using live ADC values.
+- **Provisional for now**
+  - Mapping ADC voltage I/Q directly into S-parameter values for extraction.
+  - Material extraction quality until calibrated voltage->S conversion is merged.
+
 ## Tech Stack
 
 - **Python 3.9+**: Core application language
@@ -318,7 +334,7 @@ Before taking measurements, you must calibrate the system:
 
 ## Hardware Integration
 
-The current implementation includes simulated measurement data for demonstration. To integrate with actual hardware:
+The project now includes live AD7193 SPI integration for Raspberry Pi bring-up and GUI measurement flow. The remaining hardware-math integration task is calibrated voltage-to-S-parameter conversion for extraction quality.
 
 ### System Architecture
 

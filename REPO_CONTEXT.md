@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-03-26 (post-refactor)
+Last updated: 2026-03-31 (ADC bring-up + handoff refresh)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -116,6 +116,35 @@ Status: software + simulation path validated; full hardware-in-loop validation p
 Reference:
 - `INTEGRATION_TEST_RESULTS.md` (hardware-only scope)
 
+## Current Truth (As of Latest Run)
+
+- AD7193 SPI communication is validated on Pi with stable ID reads (`0xA2`) and finite I/Q values.
+- Required AD7193 driver expectations:
+  - ID check should validate low nibble (`0xX2`), not upper nibble.
+  - Mode writes must set internal clock bits (`CLK1=1`, `CLK0=0`) so conversions complete.
+  - Differential channel select uses CH0/CH1 bit positions in config (`0x0100`, `0x0200`).
+  - REFIN1 selection is used for the Pmod AD5 default reference path.
+- GUI ADC-only measurement path is operational on Pi without motor/RF switch app control.
+- Extraction caveat: current extraction path can consume proxy S-parameters derived from ADC I/Q; calibrated voltage->S conversion is pending teammate implementation.
+
+## Who Owns What
+
+- You (integration owner):
+  - ADC bring-up and wiring validation
+  - AD7193 driver + GUI acquisition path
+  - Pi runbook execution and hardware sanity checks
+- Teammate (math owner):
+  - Calibrated voltage->S-parameter conversion
+  - Calibration model/fit integration into extraction pipeline
+
+## Next Chat Bootstrap Checklist
+
+1. Read this file plus `docs/HANDOFF_STATUS.md`.
+2. Confirm `hardware/ad7193.py` includes low-nibble ID check and internal-clock mode writes.
+3. Re-run short Pi ADC loop and confirm no channel timeouts + finite I/Q.
+4. Treat extraction outputs as provisional until teammate calibration math is merged.
+5. Continue from handoff "Immediate Next Steps" in `docs/HANDOFF_STATUS.md`.
+
 ### Active vs archived
 
 - Active code/data paths are in root + `core/` + `gui/` + `backend/` + `hardware/` + `tests/` + `Simulated Spam Calculations/`.
@@ -159,6 +188,18 @@ python tests/test_optimizer.py
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-03-31 - AD7193 Pi bring-up stabilized; handoff clarified
+- Changed:
+  - `hardware/ad7193.py`: corrected AD7193 ID check semantics (`0xX2`), ensured internal clock bits are set in mode writes, and aligned config behavior for active Pi bring-up.
+  - `README.md`: added current implementation status and explicit extraction-math boundary language.
+  - `REPO_CONTEXT.md`: added current-truth section, ownership split, and next-chat bootstrap checklist.
+- Verified:
+  - Pi low-level loop now returns finite I/Q values without repeated channel timeouts.
+  - GUI logs show ADC initialized and operational in ADC-only mode.
+- Risks/follow-up:
+  - Voltage->calibrated S-parameter math remains pending teammate implementation.
+  - Extraction quality on real hardware remains provisional until calibration module lands.
 
 ### 2026-03-26 - Added Pi ADC bring-up runbook and low-level checker
 - Changed:
@@ -231,7 +272,8 @@ python tests/test_optimizer.py
 ## Open Issues / Next Priorities
 
 1. Run smoke test on all imports and test suite to verify refactor integrity.
-2. Perform full Raspberry Pi hardware-in-loop validation for AD7193 + RF switch.
+2. Merge teammate voltage->calibrated S-parameter math into GUI extraction path.
 3. Validate extraction against calibrated real material reference sample(s).
-4. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
-5. Keep this file updated after each substantial task.
+4. Perform full Raspberry Pi hardware-in-loop validation with motor/switch in final rig.
+5. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
+6. Keep this file updated after each substantial task.
