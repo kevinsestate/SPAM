@@ -41,7 +41,7 @@ _MODE_CONT   = 0x000000  # Continuous conversion mode
 
 # Config register bits
 _CONFIG_CHOP_DIS = 0x000000  # Chop disabled
-_CONFIG_REFSEL   = 0x100000  # REFIN1 reference
+_CONFIG_REFSEL   = 0x000000  # REFIN1 reference (Pmod AD5 on-board default)
 _CONFIG_PSEUDO   = 0x040000  # Pseudo-differential (0 = fully differential)
 _CONFIG_BUF      = 0x000010  # Buffered mode
 
@@ -51,7 +51,7 @@ _GAIN_MAP = {1: 0, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7}
 # Differential channel pairs on AD7193:
 # Ch0 = AIN1+ / AIN1-  (IF-I)
 # Ch1 = AIN2+ / AIN2-  (IF-Q)
-_DIFF_CH = {0: 0x0001, 1: 0x0002}
+_DIFF_CH = {0: 0x0100, 1: 0x0200}
 
 # Reference voltage (Pmod AD5 uses external 2.5V reference)
 _VREF = 2.5
