@@ -1,0 +1,9 @@
+GUI
+app
+backend
+core
+gui
+hardware
+spam_calc
+spam_optimizer
+tests

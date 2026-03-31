@@ -48,12 +48,16 @@ if errorlevel 1 (
         echo WARNING: Failed to upgrade pip, continuing anyway...
     )
     
-    pip install -r requirements.txt --quiet
+    pip install -e . --quiet
     if errorlevel 1 (
-        echo ERROR: Failed to install dependencies
-        echo Please check that requirements.txt exists and contains valid packages
-        pause
-        exit /b 1
+        echo WARNING: pip install -e . failed, falling back to requirements.txt...
+        pip install -r requirements.txt --quiet
+        if errorlevel 1 (
+            echo ERROR: Failed to install dependencies
+            echo Please check that requirements.txt exists and contains valid packages
+            pause
+            exit /b 1
+        )
     )
     
     REM Upgrade SQLAlchemy to latest version (fixes Python 3.14 compatibility)

@@ -150,9 +150,26 @@ python tests/test_optimizer.py
 - Parsed summary: `benchmark_results.md`
 - Academic report: `benchmark_report.tex`
 
+### Pi ADC bring-up helpers
+
+- Runbook: `scripts/pi/PI_ADC_BRINGUP.md`
+- Low-level checker: `python scripts/pi/check_adc_lowlevel.py --seconds 15 --rate-hz 10`
+- First-field log template: `scripts/pi/PI_FIRST_FIELD_TEST_LOG_TEMPLATE.md`
+
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-03-26 - Added Pi ADC bring-up runbook and low-level checker
+- Changed:
+  - Added `scripts/pi/PI_ADC_BRINGUP.md` (step-by-step wiring, Pi prep, GUI/extraction verification)
+  - Added `scripts/pi/check_adc_lowlevel.py` (AD7193 low-level finite/timeout/statistics checker)
+  - Added `scripts/pi/PI_FIRST_FIELD_TEST_LOG_TEMPLATE.md` (baseline field-test capture template)
+- Verified:
+  - Script executes in simulation mode and reports expected warning when not on Pi
+  - No linter diagnostics for new files
+- Risks/follow-up:
+  - Physical wiring and SPI validation must be executed on actual Pi hardware.
 
 ### 2026-03-26 - GUI split refactor + modular architecture
 - Changed:

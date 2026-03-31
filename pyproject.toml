@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spam-scanner"
+version = "1.01"
+description = "Scanner for Polarized Anisotropic Materials"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+
+dependencies = [
+    "sqlalchemy>=2.0.23",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+
+[project.optional-dependencies]
+rpi = [
+    "RPi.GPIO>=0.7.0",
+    "spidev>=3.5",
+]
+
+[project.scripts]
+spam = "app:main"
+
+[tool.setuptools]
+py-modules = ["app", "GUI", "spam_calc", "spam_optimizer"]
+packages = ["core", "backend", "hardware", "gui", "gui.panels", "gui.dialogs", "tests"]

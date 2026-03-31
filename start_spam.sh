@@ -101,7 +101,7 @@ if [ "$DEPS_AVAILABLE" = false ]; then
             # Try to install via pip
             echo "Installing via pip..."
             pip install --upgrade pip --quiet 2>/dev/null
-            pip install -r requirements.txt --quiet 2>/dev/null
+            pip install -e . --quiet 2>/dev/null || pip install -r requirements.txt --quiet 2>/dev/null
             
             # Check if installation succeeded
             python3 -c "import matplotlib, numpy, sqlalchemy" >/dev/null 2>&1

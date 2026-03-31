@@ -1,0 +1,2 @@
+[console_scripts]
+spam = app:main
