@@ -103,7 +103,8 @@ bool spi_xfer(int fd, uint32_t speed_hz, const uint8_t* tx, uint8_t* rx, size_t 
     tr.len = static_cast<uint32_t>(len);
     tr.speed_hz = speed_hz;
     tr.bits_per_word = 8;
-    return ioctl(fd, SPI_IOC_MESSAGE(1), &tr) == 0;
+    /* POSIX: ioctl success is nonnegative; some kernels return >0, not only 0. */
+    return ioctl(fd, SPI_IOC_MESSAGE(1), &tr) >= 0;
 }
 
 using Clock = std::chrono::steady_clock;
@@ -170,8 +171,9 @@ public:
         const uint32_t stream_cfg = base_config_ | kDiffCh0 | kDiffCh1;
         const uint32_t stream_mode =
             kModeCont | kModeClkInt | kModeDatSta | (fs_val_ & 0x3FFU);
-        write_reg(kRegConfig, stream_cfg, 3);
-        write_reg(kRegMode, stream_mode, 3);
+        if (!write_reg(kRegConfig, stream_cfg, 3) || !write_reg(kRegMode, stream_mode, 3)) {
+            std::fprintf(stderr, "[ERROR] start_iq_stream: SPI write failed (%s)\n", strerror(errno));
+        }
         streaming_ = true;
         last_stream_chd_ = -1;
     }
@@ -278,7 +280,7 @@ private:
         static const uint8_t kReset[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
         uint8_t rx[6]{};
         if (!spi_xfer(fd_, speed_hz_, kReset, rx, sizeof(kReset))) {
-            std::fprintf(stderr, "[WARN] reset xfer: %s\n", strerror(errno));
+            std::fprintf(stderr, "[WARN] reset xfer failed: %s\n", strerror(errno));
         }
         usleep(10000);
     }
