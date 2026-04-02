@@ -9,6 +9,7 @@
  *   sudo apt install g++
  *   cd scripts/pi
  *   g++ -O3 -std=c++17 spi_ad7193_benchmark.cpp -o spi_ad7193_benchmark
+ *   (-O3 is capital letter O + 3, not -03 with a zero)
  *
  * Run:
  *   ./spi_ad7193_benchmark --device /dev/spidev0.0 --seconds 2
