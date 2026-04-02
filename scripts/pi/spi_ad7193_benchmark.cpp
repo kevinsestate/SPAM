@@ -20,10 +20,11 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -39,7 +40,11 @@ inline uint8_t read_cmd(uint8_t reg) {
 }
 
 bool set_spi_mode(int fd, uint32_t mode) {
-    return ioctl(fd, SPI_IOC_WR_MODE32, &mode) == 0;
+    if (ioctl(fd, SPI_IOC_WR_MODE32, &mode) == 0)
+        return true;
+    /* Older kernels / headers: 8-bit mode word */
+    uint8_t m = static_cast<uint8_t>(mode & 0xFFU);
+    return ioctl(fd, SPI_IOC_WR_MODE, &m) == 0;
 }
 
 bool set_bits(int fd, uint8_t bits) {
@@ -47,21 +52,35 @@ bool set_bits(int fd, uint8_t bits) {
 }
 
 bool xfer(int fd, uint32_t speed_hz, const uint8_t* tx, uint8_t* rx, size_t len) {
-    spi_ioc_transfer tr{};
-    tr.tx_buf = reinterpret_cast<unsigned long>(tx);
-    tr.rx_buf = reinterpret_cast<unsigned long>(rx);
+    /*
+     * Raspberry Pi spidev: set device max speed before SPI_IOC_MESSAGE.
+     * Zero the whole spi_ioc_transfer so newer kernel padding fields are 0.
+     * Use 64-bit buffer fields (__u64) via uintptr_t cast.
+     */
+    uint32_t max_hz = speed_hz;
+    /* Optional on some kernels; transfer still carries speed_hz. */
+    (void)ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &max_hz);
+
+    struct spi_ioc_transfer tr;
+    std::memset(&tr, 0, sizeof(tr));
+    tr.tx_buf = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(tx));
+    tr.rx_buf = static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(rx));
     tr.len = static_cast<uint32_t>(len);
     tr.speed_hz = speed_hz;
-    tr.delay_usecs = 0;
     tr.bits_per_word = 8;
-    return ioctl(fd, SPI_IOC_MESSAGE(1), &tr) == 0;
+
+    if (ioctl(fd, SPI_IOC_MESSAGE(1), &tr) < 0)
+        return false;
+    return true;
 }
 
 bool reset_ad7193(int fd, uint32_t speed_hz) {
     static const uint8_t kReset[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t rx[6]{};
-    if (!xfer(fd, speed_hz, kReset, rx, sizeof(kReset)))
+    if (!xfer(fd, speed_hz, kReset, rx, sizeof(kReset))) {
+        std::fprintf(stderr, "Reset SPI xfer failed: %s\n", strerror(errno));
         return false;
+    }
     usleep(10000);
     return true;
 }
@@ -197,7 +216,7 @@ int main(int argc, char** argv) {
 
     const uint32_t first_speed = args.speeds.empty() ? 100000u : args.speeds[0];
     if (args.do_reset && !reset_ad7193(fd, first_speed)) {
-        std::fprintf(stderr, "Reset xfer failed (continuing)\n");
+        std::fprintf(stderr, "Reset skipped or failed (continuing without reset)\n");
     }
 
     // Buffers: AD7193 read DATA with DAT_STA appends status in LSB of 32-bit read = 4 response bytes after cmd.
@@ -243,18 +262,18 @@ int main(int argc, char** argv) {
 
             if (args.mode == Mode::DataOnly) {
                 if (!xfer(fd, hz, tx_data, rx_data, sizeof(tx_data))) {
-                    std::fprintf(stderr, "SPI xfer failed at %u Hz\n", hz);
+                    std::fprintf(stderr, "SPI xfer failed at %u Hz: %s\n", hz, strerror(errno));
                     close(fd);
                     return 1;
                 }
             } else {
                 if (!xfer(fd, hz, tx_stat, rx_stat, sizeof(tx_stat))) {
-                    std::fprintf(stderr, "SPI status xfer failed at %u Hz\n", hz);
+                    std::fprintf(stderr, "SPI status xfer failed at %u Hz: %s\n", hz, strerror(errno));
                     close(fd);
                     return 1;
                 }
                 if (!xfer(fd, hz, tx_data, rx_data, sizeof(tx_data))) {
-                    std::fprintf(stderr, "SPI data xfer failed at %u Hz\n", hz);
+                    std::fprintf(stderr, "SPI data xfer failed at %u Hz: %s\n", hz, strerror(errno));
                     close(fd);
                     return 1;
                 }
