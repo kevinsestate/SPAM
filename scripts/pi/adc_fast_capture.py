@@ -1,5 +1,8 @@
 """Optional fast-capture harness for AD7193.
 
+For a full C++ driver + pair-rate benchmark on the Pi, build and run
+``scripts/pi/ad7193_cpp_benchmark`` (see the file header for g++ command).
+
 This script attempts to use a compiled helper module first. If unavailable,
 it falls back to the optimized Python streaming path and reports throughput.
 
