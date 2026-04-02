@@ -16,6 +16,8 @@ A local desktop application for scanning and analyzing polarized anisotropic mat
 - **GUI ADC-only flow**: Operational for measurement runs without motor/RF switch control.
 - **Motor dependency**: Optional for ADC bring-up; missing motor libs do not block ADC validation.
 - **Extraction boundary (important)**: Voltage-to-calibrated-S-parameter math is still pending teammate implementation.
+- **ADC output rate**: Configurable via **Data Rate (Hz)** in **Settings → Connection Setup** (also `adc_data_rate` in `spam_config.json`). Default `96` Hz is conservative; increase (e.g. `4800`) for faster conversions at the cost of noise / filter notches (see `hardware/ad7193.py` FS mapping).
+- **Measured I/Q pair rate**: With default `data_rate=96` and stream mode, **Python and C++** both achieve on the order of **~12 complete I/Q pairs per second** on a Pi 4 — the limit matches between languages, so the bottleneck is **ADC filter / two-channel sequencer / read pattern**, not Python alone. Raw SPI throughput is much higher (`scripts/pi/spi_ad7193_benchmark`).
 
 ### What Is Provisional vs Final
 
@@ -72,6 +74,7 @@ SPAM/
 ├── tests/
 │   ├── test_spam_calc.py   # T-matrix validation tests
 │   └── test_optimizer.py   # Extraction validation tests
+├── scripts/pi/             # Raspberry Pi ADC / SPI utilities (see below)
 ├── Simulated Spam Calculations/
 │   ├── *.mat               # Simulated validation datasets
 │   └── *.m                 # MATLAB reference scripts
@@ -79,6 +82,36 @@ SPAM/
 │   └── legacy/             # Non-active archived artifacts
 └── README.md
 ```
+
+### Raspberry Pi ADC scripts (`scripts/pi/`)
+
+Build and run on the Pi (Linux only; requires SPI enabled and `g++` for C++ tools):
+
+| Script / binary | Purpose |
+|-----------------|--------|
+| `check_adc_lowlevel.py` | Short I/Q sanity check; optional `--benchmark-raw`, `--binary-out`, `--result-json` |
+| `live_adc_view.py` | Live plot and/or benchmark; use `--data-rate`, `--spi-speed`, `--mode max-rate`, `--acq-mode stream`, `--benchmark-raw`, `--result-json` (do not pass literal `...` on the command line) |
+| `adc_fast_capture.py` | Optional native fast path hook + Python fallback |
+| `spi_ad7193_benchmark.cpp` | Raw SPI throughput vs clock (not full ADC protocol) |
+| `ad7193_cpp_benchmark.cpp` | Full AD7193 driver in C++ + **pair/s** benchmark (compare to `live_adc_view.py`) |
+
+Example (high output rate, benchmark only):
+
+```bash
+cd SPAM && source venv/bin/activate
+python scripts/pi/live_adc_view.py --data-rate 4800 --spi-speed 2000000 \
+  --mode max-rate --acq-mode stream --benchmark-raw --no-plot --duration 30 --result-json
+```
+
+Compile C++ tools:
+
+```bash
+cd SPAM/scripts/pi
+g++ -O3 -std=c++17 spi_ad7193_benchmark.cpp -o spi_ad7193_benchmark
+g++ -O3 -std=c++17 ad7193_cpp_benchmark.cpp -o ad7193_cpp_benchmark
+```
+
+(`-O3` uses the letter **O**, not zero.)
 
 ### Active vs Archive
 
@@ -334,7 +367,7 @@ Before taking measurements, you must calibrate the system:
 
 ## Hardware Integration
 
-The project now includes live AD7193 SPI integration for Raspberry Pi bring-up and GUI measurement flow. The remaining hardware-math integration task is calibrated voltage-to-S-parameter conversion for extraction quality.
+The project now includes live **AD7193 (Pmod AD5) SPI** integration on Raspberry Pi for bring-up and GUI measurement flow. (Older docs may mention I2C for a generic ADC; the shipped driver uses **`/dev/spidev*`**.) The remaining hardware-math integration task is calibrated voltage-to-S-parameter conversion for extraction quality.
 
 ### System Architecture
 

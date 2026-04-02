@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-03-31 (ADC bring-up + handoff refresh)
+Last updated: 2026-04-02 (ADC throughput notes + Pi C++ benchmarks)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -67,7 +67,10 @@ Active runtime path:
 - `backend/database.py`, `backend/models.py`
   - SQLite models; uses relative imports; `backend/__init__.py` re-exports public API.
 - `hardware/ad7193.py`, `hardware/rf_switch.py`
-  - ADC and switch control with simulation fallback.
+  - ADC (SPI) and switch control with simulation fallback.
+- `scripts/pi/`
+  - Pi-only ADC/SPI helpers: `check_adc_lowlevel.py`, `live_adc_view.py`, `adc_fast_capture.py`
+  - C++ (build on Pi): `spi_ad7193_benchmark.cpp` (raw SPI rate), `ad7193_cpp_benchmark.cpp` (full AD7193 protocol + pair/s benchmark)
 
 ### Data flow
 
@@ -124,6 +127,9 @@ Reference:
   - Mode writes must set internal clock bits (`CLK1=1`, `CLK0=0`) so conversions complete.
   - Differential channel select uses CH0/CH1 bit positions in config (`0x0100`, `0x0200`).
   - REFIN1 selection is used for the Pmod AD5 default reference path.
+- **Output data rate knob**: `configure(gain, data_rate)` in `hardware/ad7193.py` maps requested Hz → FS (`MCLK/1024/FS`). GUI: **Connection Setup → Data Rate (Hz)** / `spam_config.json` key `adc_data_rate`. CLI scripts: `--data-rate`. Higher values (e.g. `4800`) → faster ODR, more noise / less line-frequency rejection — step up gradually.
+- **Throughput observation**: At default `data_rate=96` and stream `read_iq_stream`, **Python and C++** (`ad7193_cpp_benchmark`) both report on the order of **~12 I/Q pairs/s** on Pi 4. C++ raw SPI (`spi_ad7193_benchmark`) can do **tens of kHz** of trivial transfers — so the **~12 Hz pair** limit is **ADC sequencer + filter + per-pair read logic**, not interpreter vs native code. Raising `data_rate` is the primary lever to increase pair rate; expect shared throughput across two sequenced channels.
+- **spidev ioctl**: `SPI_IOC_MESSAGE` success is **non-negative** return; treating `== 0` only as success breaks transfers on some Pi kernels (fixed in `ad7193_cpp_benchmark.cpp`).
 - GUI ADC-only measurement path is operational on Pi without motor/RF switch app control.
 - Extraction caveat: current extraction path can consume proxy S-parameters derived from ADC I/Q; calibrated voltage->S conversion is pending teammate implementation.
 
@@ -183,11 +189,24 @@ python tests/test_optimizer.py
 
 - Runbook: `scripts/pi/PI_ADC_BRINGUP.md`
 - Low-level checker: `python scripts/pi/check_adc_lowlevel.py --seconds 15 --rate-hz 10`
+- Live viewer / benchmark: `python scripts/pi/live_adc_view.py --help` (use `--data-rate`, `--benchmark-raw`, `--result-json`; no placeholder `...` args)
+- C++ (compile on Pi): `scripts/pi/spi_ad7193_benchmark.cpp`, `scripts/pi/ad7193_cpp_benchmark.cpp` — see file headers for `g++ -O3` lines
 - First-field log template: `scripts/pi/PI_FIRST_FIELD_TEST_LOG_TEMPLATE.md`
 
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-04-02 - Pi ADC throughput documentation + C++ AD7193 benchmark
+- Changed:
+  - `scripts/pi/ad7193_cpp_benchmark.cpp`: AD7193 protocol mirror + pair/s benchmark; `SPI_IOC_MESSAGE` success as **return >= 0** (not `== 0` only); chrono deadlines use `duration_cast` for Pi `steady_clock`.
+  - `README.md`: `scripts/pi/` table, data-rate / pair-rate notes, SPI vs stale I2C wording, example `live_adc_view` command.
+  - `REPO_CONTEXT.md`: current truth for data_rate, ~12 Hz pair parity (Py vs C++), spidev ioctl note, expanded Pi commands.
+- Verified:
+  - Logic reviewed against `hardware/ad7193.py`; user Pi run showed ID OK and ~12 pair/s at `data_rate=96` matching Python.
+- Risks/follow-up:
+  - High `data_rate` needs analog/SNR validation per campaign.
+  - Optional: wire max-rate capture into GUI or sidecar binary for logging.
 
 ### 2026-03-31 - AD7193 Pi bring-up stabilized; handoff clarified
 - Changed:
@@ -273,6 +292,7 @@ python tests/test_optimizer.py
 
 1. Run smoke test on all imports and test suite to verify refactor integrity.
 2. Merge teammate voltage->calibrated S-parameter math into GUI extraction path.
+3. If higher effective sample rate is required: validate raised `adc_data_rate` / `--data-rate` on hardware (noise, settling); optional sidecar high-rate capture vs GUI decimation.
 3. Validate extraction against calibrated real material reference sample(s).
 4. Perform full Raspberry Pi hardware-in-loop validation with motor/switch in final rig.
 5. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
