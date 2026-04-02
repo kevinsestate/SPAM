@@ -29,6 +29,7 @@ class MenuMixin:
         view_menu = tk.Menu(menubar, tearoff=0, bg=self._t('bg_panel'), fg=self._t('text'),
                             activebackground=self._t('accent'), activeforeground=self._t('text_em'))
         view_menu.add_command(label="Debug Console", command=self._on_debug_console, accelerator="Ctrl+D")
+        view_menu.add_command(label="Toggle ADC Voltage Graph", command=self._toggle_adc_demo_graph)
         view_menu.add_separator()
         view_menu.add_command(label="Fullscreen", command=self._toggle_fullscreen, accelerator="F11")
         menubar.add_cascade(label="View", menu=view_menu)

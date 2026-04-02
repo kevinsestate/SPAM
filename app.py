@@ -123,6 +123,14 @@ class SPAMGui(
         self._adc_only_hint_logged = False
 
         self._last_graph_count = -1
+        self.adc_demo_window_sec = 45.0
+        self.adc_demo_graph_enabled = False
+        self.adc_demo_t = []
+        self.adc_demo_tx_v = []
+        self.adc_demo_rx_v = []
+        self.adc_demo_sample_count = 0
+        self.adc_demo_sample_rate_hz = 0.0
+        self.adc_demo_t0 = None
 
         self.extraction_f0_ghz = self._safe_float(
             self.connection_settings.get('extraction_f0_ghz', '24.0'), 24.0

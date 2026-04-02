@@ -13,6 +13,40 @@ from backend import Measurement
 class MeasurementMixin:
     """Provides measurement sweep worker and start/stop/clear/view commands."""
 
+    def _reset_adc_demo_series(self):
+        """Reset rolling ADC demo buffers/counters for a new run."""
+        self.adc_demo_t = []
+        self.adc_demo_tx_v = []
+        self.adc_demo_rx_v = []
+        self.adc_demo_sample_count = 0
+        self.adc_demo_sample_rate_hz = 0.0
+        self.adc_demo_t0 = None
+
+    def _record_adc_demo_sample(self, tx_v: float, rx_v: float):
+        """Append one ADC demo sample and update effective sample-rate."""
+        now = time.monotonic()
+        if self.adc_demo_t0 is None:
+            self.adc_demo_t0 = now
+        t_rel = now - self.adc_demo_t0
+
+        self.adc_demo_t.append(t_rel)
+        self.adc_demo_tx_v.append(tx_v)
+        self.adc_demo_rx_v.append(rx_v)
+        self.adc_demo_sample_count += 1
+
+        # Keep a bounded rolling window for responsive plotting on Pi.
+        while self.adc_demo_t and (t_rel - self.adc_demo_t[0]) > self.adc_demo_window_sec:
+            self.adc_demo_t.pop(0)
+            self.adc_demo_tx_v.pop(0)
+            self.adc_demo_rx_v.pop(0)
+
+        n = len(self.adc_demo_t)
+        if n >= 2:
+            dt = self.adc_demo_t[-1] - self.adc_demo_t[0]
+            self.adc_demo_sample_rate_hz = ((n - 1) / dt) if dt > 1e-9 else 0.0
+        else:
+            self.adc_demo_sample_rate_hz = 0.0
+
     def _measurement_worker(self):
         angle_step = self.angle_step
         max_angle = 90.0
@@ -72,11 +106,14 @@ class MeasurementMixin:
                 reflected_power = -15.0 - 10.0 * (self.current_angle / 90.0)
                 transmitted_phase = -90.0 + 180.0 * (self.current_angle / 90.0)
                 reflected_phase = -45.0 + 135.0 * (self.current_angle / 90.0)
+                s21_mag = 10 ** (transmitted_power / 20.0)
+                s11_mag = 10 ** (reflected_power / 20.0)
 
             self.transmitted_power = transmitted_power
             self.reflected_power = reflected_power
             self.transmitted_phase = transmitted_phase
             self.reflected_phase = reflected_phase
+            self._record_adc_demo_sample(s21_mag, s11_mag)
             angle_rad = math.radians(self.current_angle)
             permittivity = 2.0 + 0.1 * math.sin(angle_rad)
             permeability = 1.5 + 0.05 * math.cos(angle_rad)
@@ -104,6 +141,7 @@ class MeasurementMixin:
         if self.is_measuring:
             return
         self.is_measuring = True
+        self._reset_adc_demo_series()
         self.current_angle = 0.0
         self.status_var.set("Measuring...")
         self._update_status("Sweeping 0\u00b0 to 90\u00b0", "info")
@@ -132,6 +170,7 @@ class MeasurementMixin:
                 self.db.query(Measurement).delete()
                 self.db.commit()
                 self._last_graph_count = -1
+                self._reset_adc_demo_series()
                 self.current_angle = 0.0
                 self._update_graphs()
                 self.angle_var.set("0.0\u00b0")

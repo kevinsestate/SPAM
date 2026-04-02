@@ -11,6 +11,77 @@ from .themes import _FONT, _MONO
 class GraphsMixin:
     """Provides center panel creation, graph styling, graph updates, and periodic display refresh."""
 
+    def _toggle_adc_demo_graph(self):
+        self.adc_demo_graph_enabled = not self.adc_demo_graph_enabled
+        state = "enabled" if self.adc_demo_graph_enabled else "disabled"
+        self._log_debug(f"ADC voltage graph {state}", "INFO")
+        self._update_graphs()
+
+    def _adc_demo_volts_to_mv(self, v_list):
+        return [x * 1000.0 for x in v_list] if v_list else []
+
+    def _adc_demo_ylim_mv(self, tx_mv, rx_mv):
+        """Baseline 0..1000 mV; expand upper bound when signal exceeds with padding."""
+        all_mv = list(tx_mv) + list(rx_mv)
+        if not all_mv:
+            return 0.0, 1000.0
+        vmax = max(all_mv)
+        pad = max(30.0, (vmax - min(all_mv)) * 0.12) if len(all_mv) > 1 else 40.0
+        y_high = max(1000.0, vmax + pad)
+        return 0.0, y_high
+
+    def _render_adc_live_readout(self):
+        """Bottom-left numeric readout (axes coordinates)."""
+        txv = self.adc_demo_tx_v if self.adc_demo_tx_v else []
+        rxv = self.adc_demo_rx_v if self.adc_demo_rx_v else []
+        tx_mv = txv[-1] * 1000.0 if txv else 0.0
+        rx_mv = rxv[-1] * 1000.0 if rxv else 0.0
+        d_mv = tx_mv - rx_mv
+        n = self.adc_demo_sample_count
+        rate = self.adc_demo_sample_rate_hz
+        body = (
+            f"TX  {tx_mv:7.1f} mV\n"
+            f"RX  {rx_mv:7.1f} mV\n"
+            f"\u0394   {d_mv:+7.1f} mV\n"
+            f"N={n}   {rate:.2f} samp/s"
+        )
+        t = self.theme
+        self.ax4.text(
+            0.02, 0.02, body,
+            transform=self.ax4.transAxes,
+            ha="left", va="bottom",
+            fontsize=8, family=_MONO,
+            color=t['text'],
+            bbox=dict(
+                boxstyle="round,pad=0.35",
+                facecolor=t['bg_elevated'],
+                edgecolor=t['border'],
+                alpha=0.92,
+            ),
+        )
+
+    def _render_adc_placeholder(self):
+        self.ax4.clear()
+        self.ax4.set_xlim(0, 1)
+        self.ax4.set_ylim(0, 1)
+        self.ax4.grid(False)
+        self.ax4.set_xticks([])
+        self.ax4.set_yticks([])
+        self.ax4.text(
+            0.5, 0.58, "ADC demo disabled",
+            ha="center", va="center",
+            fontsize=12, fontweight="bold",
+            color=self._t('text'),
+            transform=self.ax4.transAxes
+        )
+        self.ax4.text(
+            0.5, 0.42, "Enable via View -> Toggle ADC Voltage Graph",
+            ha="center", va="center",
+            fontsize=9,
+            color=self._t('text_sec'),
+            transform=self.ax4.transAxes
+        )
+
     def _create_center_panel(self) -> None:
         center = tk.Frame(self, bg=self._t('bg'))
         center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1, pady=1)
@@ -27,7 +98,7 @@ class GraphsMixin:
         gc = t['grid']
         dpi = 100
 
-        def make_graph(parent, row, col, title_text, ylabel_text):
+        def make_graph(parent, row, col, title_text, ylabel_text, xlabel_text="Angle (\u00b0)"):
             frame = tk.Frame(parent, bg=fc, highlightbackground=t['border'],
                              highlightthickness=1)
             frame.grid(row=row, column=col, sticky="nsew", padx=2, pady=2)
@@ -35,7 +106,7 @@ class GraphsMixin:
             ax = fig.add_subplot(111, facecolor=fc)
             ax.set_xlim(0, 90)
             ax.set_title(title_text, color=tc, fontsize=10, fontweight='bold', pad=8)
-            ax.set_xlabel("Angle (\u00b0)", color=sc, fontsize=9)
+            ax.set_xlabel(xlabel_text, color=sc, fontsize=9)
             ax.set_ylabel(ylabel_text, color=sc, fontsize=9)
             ax.grid(True, alpha=0.4, color=gc, linestyle='--', linewidth=0.5)
             ax.tick_params(colors=sc, labelsize=8)
@@ -62,8 +133,9 @@ class GraphsMixin:
         self.ax3.set_ylim(-30, 10)
 
         self.fig4, self.ax4, self.canvas4 = make_graph(center, 1, 1,
-            "TX / RX Phase vs Angle", "Phase (\u00b0)")
-        self.ax4.set_ylim(-180, 180)
+            "ADC Voltage vs Time", "Voltage (mV)", xlabel_text="Time (s)")
+        self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
+        self.ax4.set_ylim(0, 1000)
 
         self.center_frame = center
         self.measurement_angles = []
@@ -89,10 +161,10 @@ class GraphsMixin:
             self.resize_timer = self.after(self.resize_delay, do_resize)
         self.bind('<Configure>', on_resize)
 
-    def _style_ax(self, ax, title, ylabel):
+    def _style_ax(self, ax, title, ylabel, xlabel="Angle (\u00b0)"):
         t = self.theme
         ax.set_title(title, color=t['text'], fontsize=10, fontweight='bold', pad=8)
-        ax.set_xlabel("Angle (\u00b0)", color=t['text_sec'], fontsize=9)
+        ax.set_xlabel(xlabel, color=t['text_sec'], fontsize=9)
         ax.set_ylabel(ylabel, color=t['text_sec'], fontsize=9)
         ax.grid(True, alpha=0.4, color=t['grid'], linestyle='--', linewidth=0.5)
         ax.tick_params(colors=t['text_sec'], labelsize=8)
@@ -104,7 +176,9 @@ class GraphsMixin:
     def _update_graphs(self):
         measurements = self._get_measurements()
         n = len(measurements) if measurements else 0
-        if n == self._last_graph_count and n > 0:
+        toggle_changed = getattr(self, '_last_adc_graph_enabled_state', None) != self.adc_demo_graph_enabled
+        self._last_adc_graph_enabled_state = self.adc_demo_graph_enabled
+        if n == self._last_graph_count and n > 0 and not toggle_changed:
             return
         self._last_graph_count = n
         t = self.theme
@@ -115,12 +189,19 @@ class GraphsMixin:
                 (self.ax1, "Permittivity (\u03b5) vs Angle", "Permittivity (\u03b5)", (1.5, 2.5)),
                 (self.ax2, "Permeability (\u03bc) vs Angle", "Permeability (\u03bc)", (1.0, 2.0)),
                 (self.ax3, "TX / RX Power vs Angle", "Power (dBm)", (-30, 10)),
-                (self.ax4, "TX / RX Phase vs Angle", "Phase (\u00b0)", (-180, 180)),
+                (self.ax4, "ADC Voltage vs Time", "Voltage (mV)", (0, 1000)),
             ]:
                 ax.clear()
                 ax.set_xlim(0, 90)
                 ax.set_ylim(*ylim)
                 self._style_ax(ax, title, yl)
+            if not self.adc_demo_graph_enabled:
+                self._render_adc_placeholder()
+            else:
+                self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
+                self.ax4.set_ylim(0.0, 1000.0)
+                self._style_ax(self.ax4, "ADC Voltage vs Time", "Voltage (mV)", xlabel="Time (s)")
+                self._render_adc_live_readout()
         else:
             angles = [m.angle for m in measurements]
             perm = [m.permittivity for m in measurements]
@@ -155,14 +236,37 @@ class GraphsMixin:
                     self.ax3.set_ylim(min(all_p)-5, max(all_p)+5)
             self._style_ax(self.ax3, "TX / RX Power vs Angle", "Power (dBm)")
 
-            self.ax4.clear()
-            self.ax4.plot(angles, tx_ph, color=p1, linewidth=1.8, label='TX', marker='o', markersize=3)
-            self.ax4.plot(angles, rx_ph, color=p2, linewidth=1.8, label='RX', marker='s', markersize=3)
-            self.ax4.legend(loc='best', fontsize=8, framealpha=0.5)
-            if angles:
-                self.ax4.set_xlim(max(0, min(angles)-5), min(90, max(angles)+5))
-            self.ax4.set_ylim(-180, 180)
-            self._style_ax(self.ax4, "TX / RX Phase vs Angle", "Phase (\u00b0)")
+            if not self.adc_demo_graph_enabled:
+                self._render_adc_placeholder()
+            else:
+                self.ax4.clear()
+                tt = self.adc_demo_t if self.adc_demo_t else []
+                txv = self.adc_demo_tx_v if self.adc_demo_tx_v else []
+                rxv = self.adc_demo_rx_v if self.adc_demo_rx_v else []
+                tx_mv = self._adc_demo_volts_to_mv(txv)
+                rx_mv = self._adc_demo_volts_to_mv(rxv)
+                n_pts = min(len(tt), len(tx_mv), len(rxv))
+                if n_pts > 0:
+                    tt_p = tt[-n_pts:]
+                    tx_p = tx_mv[-n_pts:]
+                    rx_p = rx_mv[-n_pts:]
+                    self.ax4.plot(tt_p, tx_p, color=p1, linewidth=1.8, label='TX (mV)')
+                    self.ax4.plot(tt_p, rx_p, color=p2, linewidth=1.8, label='RX (mV)')
+                    self.ax4.legend(loc='upper right', fontsize=8, framealpha=0.5)
+                    x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
+                    self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
+                    y0, y1 = self._adc_demo_ylim_mv(tx_p, rx_p)
+                    self.ax4.set_ylim(y0, y1)
+                else:
+                    self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
+                    self.ax4.set_ylim(0.0, 1000.0)
+                adc_title = (
+                    f"ADC Voltage vs Time  "
+                    f"(N={self.adc_demo_sample_count}, "
+                    f"~{self.adc_demo_sample_rate_hz:.2f} samp/s)"
+                )
+                self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
+                self._render_adc_live_readout()
 
         for f in [self.fig1, self.fig2, self.fig3, self.fig4]:
             f.tight_layout(pad=1.5)
