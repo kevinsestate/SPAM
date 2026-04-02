@@ -112,6 +112,12 @@ inline double seconds_since(Clock::time_point t0) {
     return std::chrono::duration<double>(Clock::now() - t0).count();
 }
 
+/** Add floating-point seconds to a time_point (portable with integral steady_clock::duration). */
+inline Clock::time_point add_duration_sec(Clock::time_point t, double sec) {
+    return t + std::chrono::duration_cast<Clock::duration>(
+               std::chrono::duration<double>(sec));
+}
+
 class AD7193 {
 public:
     AD7193(const char* device, uint32_t speed_hz) : speed_hz_(speed_hz) {
@@ -185,11 +191,11 @@ public:
 
         std::optional<double> i_v;
         std::optional<double> q_v;
-        const Clock::time_point t_deadline =
-            Clock::now() + std::chrono::duration<double>(std::max(0.01, timeout_s));
+        const Clock::time_point t0 = Clock::now();
+        const double tmo = std::max(0.01, timeout_s);
+        const Clock::time_point t_deadline = add_duration_sec(t0, tmo);
         const double fast_frac = fast_path ? 0.6 : 1.0;
-        const Clock::time_point t_fast_end =
-            Clock::now() + std::chrono::duration<double>(fast_frac * std::max(0.01, timeout_s));
+        const Clock::time_point t_fast_end = add_duration_sec(t0, fast_frac * tmo);
 
         /* Stage 1: fast path (matches hardware/ad7193.py) */
         while (fast_path && Clock::now() < t_fast_end && (!i_v.has_value() || !q_v.has_value())) {
@@ -317,7 +323,7 @@ private:
 
     bool wait_ready(double timeout_s, double poll_sleep_s) {
         const Clock::time_point deadline =
-            Clock::now() + std::chrono::duration<double>(timeout_s);
+            add_duration_sec(Clock::now(), timeout_s);
         while (Clock::now() < deadline) {
             uint32_t status = 0;
             if (!read_reg(kRegStatus, 1, status))
