@@ -11,6 +11,7 @@ import argparse
 import csv
 import math
 import statistics
+import struct
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rate-hz", type=float, default=10.0, help="Sampling print rate in Hz")
     p.add_argument("--acq-mode", choices=["single", "stream"], default="single",
                    help="ADC acquisition backend to test")
+    p.add_argument("--benchmark-raw", action="store_true",
+                   help="Disable per-sample printing/sleep to measure capture throughput")
+    p.add_argument("--result-json", action="store_true",
+                   help="Emit machine-parsable RESULT line")
+    p.add_argument("--binary-out", type=str, default="", help="Optional binary output file")
     p.add_argument("--csv", type=str, default="", help="Optional CSV output path")
     return p.parse_args()
 
@@ -63,19 +69,29 @@ def main() -> int:
 
         dt = 1.0 / max(args.rate_hz, 0.1)
         start = time.time()
+        bin_fh = None
+        if args.binary_out:
+            out_path = Path(args.binary_out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            bin_fh = out_path.open("wb")
         while time.time() - start < args.seconds:
             t = time.time() - start
             if args.acq_mode == "stream":
-                i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
+                i_v, q_v = adc.read_iq_stream(timeout_s=0.5, fast_path=True)
             else:
                 i_v, q_v = adc.read_iq()
             mag = math.sqrt(i_v * i_v + q_v * q_v)
             log_records.append((t, i_v, q_v, mag))
+            if bin_fh is not None:
+                bin_fh.write(struct.pack("<dff", t, float(i_v), float(q_v)))
             finite = math.isfinite(i_v) and math.isfinite(q_v) and math.isfinite(mag)
-            print(
-                f"t={t:7.3f}s  I={i_v: .6f} V  Q={q_v: .6f} V  |IQ|={mag: .6f}  finite={finite}"
-            )
-            time.sleep(dt)
+            if not args.benchmark_raw:
+                print(
+                    f"t={t:7.3f}s  I={i_v: .6f} V  Q={q_v: .6f} V  |IQ|={mag: .6f}  finite={finite}"
+                )
+                time.sleep(dt)
+        if bin_fh is not None:
+            bin_fh.close()
 
         if not log_records:
             print("[ERROR] No samples captured.")
@@ -89,6 +105,7 @@ def main() -> int:
 
         print("\n=== Summary ===")
         print(f"samples={total_count} finite={finite_count}")
+        print(f"elapsed={args.seconds:.2f}s pair_rate={total_count/max(1e-9,args.seconds):.2f}Hz")
         if finite_count != total_count:
             print("[WARN] Non-finite samples detected.")
         if i_vals:
@@ -127,6 +144,17 @@ def main() -> int:
                 w.writerow(["t_s", "i_v", "q_v", "mag_v"])
                 w.writerows(log_records)
             print(f"[INFO] wrote CSV -> {out_path}")
+        if args.binary_out:
+            print(f"[INFO] wrote binary -> {args.binary_out}")
+        if args.result_json:
+            print(
+                "RESULT "
+                f"samples={total_count} "
+                f"finite={finite_count} "
+                f"pair_hz={total_count/max(1e-9,args.seconds):.4f} "
+                f"acq_mode={args.acq_mode} "
+                f"benchmark_raw={int(args.benchmark_raw)}"
+            )
 
         if adc.is_simulated:
             print("[WARN] ADC is in simulation mode. On Pi, verify spidev and wiring.")

@@ -86,6 +86,7 @@ class AD7193:
         self._base_config = _CONFIG_REFSEL | _CONFIG_BUF
         self._config_by_channel = {}
         self._streaming = False
+        self._last_stream_chd = -1
 
         if self._sim:
             self._spi = None
@@ -212,6 +213,7 @@ class AD7193:
         self._write_reg(_REG_CONFIG, stream_cfg, 3)
         self._write_reg(_REG_MODE, stream_mode, 3)
         self._streaming = True
+        self._last_stream_chd = -1
 
     def stop_stream(self):
         """Return ADC to idle mode from streaming mode."""
@@ -220,7 +222,7 @@ class AD7193:
         self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
         self._streaming = False
 
-    def read_iq_stream(self, timeout_s=0.5):
+    def read_iq_stream(self, timeout_s=0.5, fast_path=True):
         """Read I/Q using channel sequencer in continuous conversion mode."""
         if self._sim:
             return self._sim_voltage(0), self._sim_voltage(1)
@@ -231,12 +233,18 @@ class AD7193:
         q_v = None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline and (i_v is None or q_v is None):
-            if not self._wait_ready(timeout_s=0.2, poll_sleep_s=0.00005):
-                continue
+            if not fast_path:
+                # Conservative path: wait for explicit ready edge.
+                if not self._wait_ready(timeout_s=0.2, poll_sleep_s=0.00005):
+                    continue
             d32 = self._read_reg(_REG_DATA, 4)  # D23..D0 + status (DAT_STA enabled)
             raw = (d32 >> 8) & 0xFFFFFF
             st = d32 & 0xFF
             chd = st & 0x0F
+            if fast_path and chd == self._last_stream_chd:
+                # Fast path: if converter has not advanced channels yet, skip this frame.
+                continue
+            self._last_stream_chd = chd
             if chd == 0:
                 i_v = self._raw_to_voltage(raw)
             elif chd == 1:

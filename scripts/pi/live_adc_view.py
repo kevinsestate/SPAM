@@ -1,11 +1,10 @@
-"""Live AD7193 ADC viewer (low-noise + max-rate modes).
+"""Live AD7193 ADC viewer (low-noise + throughput modes).
 
 Usage examples:
   python scripts/pi/live_adc_view.py
-  python scripts/pi/live_adc_view.py --mode low-noise
   python scripts/pi/live_adc_view.py --mode max-rate --no-plot --duration 10
-  python scripts/pi/live_adc_view.py --benchmark-raw --duration 10
-  python scripts/pi/live_adc_view.py --spi-speed 100000 --data-rate 96 --target-hz 20
+  python scripts/pi/live_adc_view.py --benchmark-raw --duration 10 --result-json
+  python scripts/pi/live_adc_view.py --binary-out capture.bin --duration 30
 """
 
 from __future__ import annotations
@@ -13,9 +12,12 @@ from __future__ import annotations
 import argparse
 import math
 import statistics
+import struct
 import sys
+import threading
 import time
 from collections import deque
+from queue import Empty, Full, Queue
 from pathlib import Path
 
 # Ensure repo root is importable when running from scripts/pi.
@@ -40,6 +42,17 @@ def parse_args() -> argparse.Namespace:
                    help="ADC acquisition backend")
     p.add_argument("--benchmark-raw", action="store_true",
                    help="Benchmark acquisition only (disables filters, plot, frequent output)")
+    p.add_argument("--binary-out", type=str, default="",
+                   help="Optional binary capture output path (raw frames, disables plot)")
+    p.add_argument("--result-json", action="store_true",
+                   help="Emit machine-parsable RESULT line")
+    p.add_argument("--queue-size", type=int, default=8192,
+                   help="Producer-consumer queue size")
+    p.add_argument("--split-io", dest="split_io", action="store_true",
+                   help="Use producer-consumer split (default)")
+    p.add_argument("--no-split-io", dest="split_io", action="store_false",
+                   help="Disable producer-consumer split")
+    p.set_defaults(split_io=True)
     p.add_argument("--print-hz", type=float, default=4.0, help="Terminal refresh rate")
     p.add_argument("--plot-hz", type=float, default=8.0, help="Plot refresh rate")
     p.add_argument("--median-window", type=int, default=5, help="Low-noise median window size (odd number preferred)")
@@ -56,6 +69,45 @@ def _safe_stats(values: list[float]) -> tuple[float, float, float, float]:
     if not values:
         return 0.0, 0.0, 0.0, 0.0
     return statistics.mean(values), statistics.pstdev(values), min(values), max(values)
+
+
+def _acq_worker(
+    adc,
+    use_stream: bool,
+    acq_dt: float,
+    duration_s: float,
+    t0: float,
+    q: Queue,
+    stop_evt: threading.Event,
+    counters: dict,
+    bin_fh,
+):
+    while not stop_evt.is_set():
+        now = time.monotonic()
+        t = now - t0
+        if duration_s > 0 and t >= duration_s:
+            break
+        if use_stream:
+            i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
+        else:
+            i_v, q_v = adc.read_iq()
+        counters["frames_total"] += 1
+        counters["last_t"] = t
+
+        if bin_fh is not None:
+            # t (float64), i_v (float32), q_v (float32)
+            bin_fh.write(struct.pack("<dff", t, float(i_v), float(q_v)))
+
+        try:
+            q.put_nowait((t, float(i_v), float(q_v)))
+        except Full:
+            counters["queue_drops"] += 1
+
+        if acq_dt > 0:
+            time.sleep(acq_dt)
+
+    counters["producer_done"] = True
+    stop_evt.set()
 
 
 def main() -> int:
@@ -107,6 +159,7 @@ def main() -> int:
     t_acq: deque[float] = deque(maxlen=2048)
     render_count = 0
     plot_count = 0
+    queue_drop_count = 0
 
     def log_fn(msg: str, lvl: str) -> None:
         print(f"[{lvl}] {msg}")
@@ -115,6 +168,8 @@ def main() -> int:
     try:
         adc = AD7193(args.spi_bus, args.spi_cs, args.spi_speed, log_fn=log_fn)
         adc.configure(gain=args.gain, data_rate=args.data_rate)
+        if args.binary_out:
+            args.benchmark_raw = True
         if args.acq_mode == "auto":
             use_stream = (args.mode == "max-rate") or args.benchmark_raw
         else:
@@ -126,7 +181,8 @@ def main() -> int:
             f"gain={args.gain} rate={args.data_rate}Hz simulated={adc.is_simulated}"
         )
         print(f"[INFO] mode={args.mode} acq_mode={'stream' if use_stream else 'single'} "
-              f"print_hz={args.print_hz} plot_hz={args.plot_hz} benchmark_raw={args.benchmark_raw}")
+              f"print_hz={args.print_hz} plot_hz={args.plot_hz} benchmark_raw={args.benchmark_raw} "
+              f"split_io={args.split_io}")
         print("[INFO] Channels: CH0=I (AIN1+/AIN1-), CH1=Q (AIN2+/AIN2-)")
         print("[INFO] Press Ctrl+C to stop.\n")
 
@@ -165,120 +221,169 @@ def main() -> int:
         t0 = time.monotonic()
         last_print = 0.0
         last_plot = 0.0
+        q_samples: Queue = Queue(maxsize=max(64, int(args.queue_size)))
+        stop_evt = threading.Event()
+        producer_counters = {"frames_total": 0, "queue_drops": 0, "producer_done": False, "last_t": 0.0}
 
-        while True:
-            now = time.monotonic()
-            t = now - t0
-            if args.duration > 0 and t >= args.duration:
-                break
+        bin_fh = None
+        if args.binary_out:
+            out_path = Path(args.binary_out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            bin_fh = out_path.open("wb")
 
-            if use_stream:
-                i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
-            else:
-                i_v, q_v = adc.read_iq()
-            i_mv_raw = i_v * 1000.0
-            q_mv_raw = q_v * 1000.0
-            mag_mv_raw = math.sqrt(i_mv_raw * i_mv_raw + q_mv_raw * q_mv_raw)
-            raw_i_mv.append(i_mv_raw)
-            raw_q_mv.append(q_mv_raw)
-            raw_mag_mv.append(mag_mv_raw)
+        acq_thread = None
+        if args.split_io:
+            acq_thread = threading.Thread(
+                target=_acq_worker,
+                args=(adc, use_stream, acq_dt, float(args.duration), t0, q_samples, stop_evt, producer_counters, bin_fh),
+                daemon=True,
+            )
+            acq_thread.start()
 
-            if args.mode == "low-noise" and not args.benchmark_raw:
-                med_i.append(i_mv_raw)
-                med_q.append(q_mv_raw)
-                i_med = statistics.median(med_i)
-                q_med = statistics.median(med_q)
+        try:
+            while True:
+                now = time.monotonic()
+                t = now - t0
+                if (args.duration > 0 and t >= args.duration and q_samples.empty()):
+                    break
+                if args.split_io and producer_counters.get("producer_done") and q_samples.empty():
+                    break
 
-                if ema_i is None:
-                    ema_i = i_med
-                    ema_q = q_med
+                # Acquire directly if split path disabled.
+                if not args.split_io:
+                    if use_stream:
+                        i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
+                    else:
+                        i_v, q_v = adc.read_iq()
+                    producer_counters["frames_total"] += 1
+                    sample_batch = [(t, float(i_v), float(q_v))]
+                    if bin_fh is not None:
+                        bin_fh.write(struct.pack("<dff", t, float(i_v), float(q_v)))
                 else:
-                    cand_i = ema_i + alpha * (i_med - ema_i)
-                    cand_q = ema_q + alpha * (q_med - ema_q)
-                    if spike_thr > 0 and abs(cand_i - ema_i) > spike_thr:
-                        spike_rejects += 1
-                        cand_i = ema_i
-                    if spike_thr > 0 and abs(cand_q - ema_q) > spike_thr:
-                        spike_rejects += 1
-                        cand_q = ema_q
-                    ema_i, ema_q = cand_i, cand_q
+                    sample_batch = []
+                    while True:
+                        try:
+                            sample_batch.append(q_samples.get_nowait())
+                        except Empty:
+                            break
+                    queue_drop_count = producer_counters["queue_drops"]
+                    if not sample_batch:
+                        # Small sleep avoids busy-spin when waiting for producer.
+                        time.sleep(0.0005)
 
-                i_mv = float(ema_i)
-                q_mv = float(ema_q)
-            else:
-                i_mv = i_mv_raw
-                q_mv = q_mv_raw
+                for (ts, i_v, q_v) in sample_batch:
+                    i_mv_raw = i_v * 1000.0
+                    q_mv_raw = q_v * 1000.0
+                    mag_mv_raw = math.sqrt(i_mv_raw * i_mv_raw + q_mv_raw * q_mv_raw)
+                    raw_i_mv.append(i_mv_raw)
+                    raw_q_mv.append(q_mv_raw)
+                    raw_mag_mv.append(mag_mv_raw)
+                    t_acq.append(ts + t0)
 
-            mag_mv = math.sqrt(i_mv * i_mv + q_mv * q_mv)
-            d_mv = i_mv - q_mv
+                    if args.mode == "low-noise" and not args.benchmark_raw:
+                        med_i.append(i_mv_raw)
+                        med_q.append(q_mv_raw)
+                        i_med = statistics.median(med_i)
+                        q_med = statistics.median(med_q)
+                        if ema_i is None:
+                            ema_i, ema_q = i_med, q_med
+                        else:
+                            cand_i = ema_i + alpha * (i_med - ema_i)
+                            cand_q = ema_q + alpha * (q_med - ema_q)
+                            if spike_thr > 0 and abs(cand_i - ema_i) > spike_thr:
+                                spike_rejects += 1
+                                cand_i = ema_i
+                            if spike_thr > 0 and abs(cand_q - ema_q) > spike_thr:
+                                spike_rejects += 1
+                                cand_q = ema_q
+                            ema_i, ema_q = cand_i, cand_q
+                        i_mv = float(ema_i)
+                        q_mv = float(ema_q)
+                    else:
+                        i_mv = i_mv_raw
+                        q_mv = q_mv_raw
 
-            disp_i_mv.append(i_mv)
-            disp_q_mv.append(q_mv)
-            disp_mag_mv.append(mag_mv)
+                    mag_mv = math.sqrt(i_mv * i_mv + q_mv * q_mv)
+                    disp_i_mv.append(i_mv)
+                    disp_q_mv.append(q_mv)
+                    disp_mag_mv.append(mag_mv)
+                    t_buf.append(ts)
+                    i_buf_mv.append(i_mv)
+                    q_buf_mv.append(q_mv)
+                    while t_buf and (ts - t_buf[0]) > args.window_sec:
+                        t_buf.popleft()
+                        i_buf_mv.popleft()
+                        q_buf_mv.popleft()
 
-            t_buf.append(t)
-            i_buf_mv.append(i_mv)
-            q_buf_mv.append(q_mv)
-            while t_buf and (t - t_buf[0]) > args.window_sec:
-                t_buf.popleft()
-                i_buf_mv.popleft()
-                q_buf_mv.popleft()
+                if len(t_acq) >= 2:
+                    acq_rate = (len(t_acq) - 1) / max(1e-9, (t_acq[-1] - t_acq[0]))
+                else:
+                    acq_rate = 0.0
 
-            t_acq.append(now)
-            if len(t_acq) >= 2:
-                acq_rate = (len(t_acq) - 1) / max(1e-9, (t_acq[-1] - t_acq[0]))
-            else:
-                acq_rate = 0.0
-
-            if (not args.benchmark_raw) and (now - last_print) >= print_dt:
-                render_count += 1
-                print_rate = render_count / max(1e-9, t)
-                print(
-                    f"\rt={t:7.2f}s  I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  "
-                    f"Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV  "
-                    f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f}Hz  disp~{print_rate:5.2f}Hz",
-                    end="",
-                    flush=True,
-                )
-                last_print = now
-
-            if (
-                show_plot
-                and plt is not None
-                and ax_top is not None
-                and ax_bot is not None
-                and ln_i is not None
-                and ln_q is not None
-                and ln_mag is not None
-                and txt_live is not None
-                and (now - last_plot) >= plot_dt
-            ):
-                plot_count += 1
-                tx = list(t_buf)
-                iy = list(i_buf_mv)
-                qy = list(q_buf_mv)
-                my = [math.sqrt(i * i + q * q) for i, q in zip(iy, qy)]
-                ln_i.set_data(tx, iy)
-                ln_q.set_data(tx, qy)
-                ln_mag.set_data(tx, my)
-                if tx:
-                    x0 = max(0.0, tx[-1] - args.window_sec)
-                    x1 = max(x0 + 1.0, tx[-1] + 0.2)
-                    ax_top.set_xlim(x0, x1)
-                    ax_bot.set_xlim(x0, x1)
-                    ymax_iq = max(max(iy), max(qy))
-                    ymax_mag = max(my) if my else 0.0
-                    ax_top.set_ylim(0.0, max(1000.0, ymax_iq + 80.0))
-                    ax_bot.set_ylim(0.0, max(1000.0, ymax_mag + 80.0))
-                    txt_live.set_text(
-                        f"I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV\n"
-                        f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f} Hz  mode={args.mode}"
+                if (not args.benchmark_raw) and (now - last_print) >= print_dt and disp_i_mv:
+                    render_count += 1
+                    print_rate = render_count / max(1e-9, t)
+                    i_mv = disp_i_mv[-1]
+                    q_mv = disp_q_mv[-1]
+                    mag_mv = disp_mag_mv[-1]
+                    d_mv = i_mv - q_mv
+                    print(
+                        f"\rt={t:7.2f}s  I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  "
+                        f"Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV  "
+                        f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f}Hz  disp~{print_rate:5.2f}Hz",
+                        end="",
+                        flush=True,
                     )
-                plt.pause(0.001)
-                last_plot = now
+                    last_print = now
 
-            if acq_dt > 0:
-                time.sleep(acq_dt)
+                if (
+                    show_plot
+                    and plt is not None
+                    and ax_top is not None
+                    and ax_bot is not None
+                    and ln_i is not None
+                    and ln_q is not None
+                    and ln_mag is not None
+                    and txt_live is not None
+                    and (now - last_plot) >= plot_dt
+                    and disp_i_mv
+                ):
+                    plot_count += 1
+                    tx = list(t_buf)
+                    iy = list(i_buf_mv)
+                    qy = list(q_buf_mv)
+                    my = [math.sqrt(i * i + q * q) for i, q in zip(iy, qy)]
+                    ln_i.set_data(tx, iy)
+                    ln_q.set_data(tx, qy)
+                    ln_mag.set_data(tx, my)
+                    if tx:
+                        x0 = max(0.0, tx[-1] - args.window_sec)
+                        x1 = max(x0 + 1.0, tx[-1] + 0.2)
+                        ax_top.set_xlim(x0, x1)
+                        ax_bot.set_xlim(x0, x1)
+                        ymax_iq = max(max(iy), max(qy))
+                        ymax_mag = max(my) if my else 0.0
+                        ax_top.set_ylim(0.0, max(1000.0, ymax_iq + 80.0))
+                        ax_bot.set_ylim(0.0, max(1000.0, ymax_mag + 80.0))
+                        i_mv = disp_i_mv[-1]
+                        q_mv = disp_q_mv[-1]
+                        mag_mv = disp_mag_mv[-1]
+                        d_mv = i_mv - q_mv
+                        txt_live.set_text(
+                            f"I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV\n"
+                            f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f} Hz  mode={args.mode}"
+                        )
+                    plt.pause(0.001)
+                    last_plot = now
+
+                if (not args.split_io) and acq_dt > 0:
+                    time.sleep(acq_dt)
+        finally:
+            stop_evt.set()
+            if acq_thread is not None:
+                acq_thread.join(timeout=1.0)
+            if bin_fh is not None:
+                bin_fh.close()
 
         print()  # newline after carriage-return loop
 
@@ -301,6 +406,8 @@ def main() -> int:
         print("\n=== Summary ===")
         print(f"mode={args.mode}")
         print(f"benchmark_raw={args.benchmark_raw}")
+        print(f"split_io={args.split_io}")
+        print(f"acq_backend={'stream' if use_stream else 'single'} queue_drops={queue_drop_count}")
         print(f"samples={len(raw_i_mv)} elapsed={t_elapsed:.2f}s")
         print(f"rates: acquisition={acq_eff:.2f} Hz  terminal={disp_eff:.2f} Hz  plot={plot_eff:.2f} Hz")
         if args.mode == "low-noise":
@@ -326,6 +433,20 @@ def main() -> int:
         print(
             "DSP |IQ|(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(fm_mu, fm_sd, fm_min, fm_max)
         )
+        if args.result_json:
+            # Machine-parsable one-line summary.
+            print(
+                "RESULT "
+                f"samples={len(raw_i_mv)} "
+                f"acq_hz={acq_eff:.4f} "
+                f"term_hz={disp_eff:.4f} "
+                f"plot_hz={plot_eff:.4f} "
+                f"queue_drops={queue_drop_count} "
+                f"mode={args.mode} "
+                f"acq_backend={'stream' if use_stream else 'single'} "
+                f"benchmark_raw={int(args.benchmark_raw)} "
+                f"split_io={int(args.split_io)}"
+            )
 
         if adc.is_simulated:
             print("[WARN] ADC is in simulation mode. On Pi, verify spidev and wiring.")
