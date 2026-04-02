@@ -87,6 +87,9 @@ class AD7193:
         self._config_by_channel = {}
         self._streaming = False
         self._last_stream_chd = -1
+        self._last_i_v = 0.0
+        self._last_q_v = 0.0
+        self._stream_timeout_count = 0
 
         if self._sim:
             self._spi = None
@@ -231,18 +234,18 @@ class AD7193:
 
         i_v = None
         q_v = None
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline and (i_v is None or q_v is None):
-            if not fast_path:
-                # Conservative path: wait for explicit ready edge.
-                if not self._wait_ready(timeout_s=0.2, poll_sleep_s=0.00005):
-                    continue
+        deadline = time.monotonic() + max(0.01, float(timeout_s))
+        fast_deadline = deadline if not fast_path else (time.monotonic() + 0.6 * max(0.01, float(timeout_s)))
+
+        # Stage 1: aggressive fast path.
+        while fast_path and time.monotonic() < fast_deadline and (i_v is None or q_v is None):
+            # Poll status quickly to avoid stale reads while keeping overhead low.
+            if self._read_reg(_REG_STATUS, 1) & 0x80:
+                continue
             d32 = self._read_reg(_REG_DATA, 4)  # D23..D0 + status (DAT_STA enabled)
             raw = (d32 >> 8) & 0xFFFFFF
-            st = d32 & 0xFF
-            chd = st & 0x0F
-            if fast_path and chd == self._last_stream_chd:
-                # Fast path: if converter has not advanced channels yet, skip this frame.
+            chd = d32 & 0x0F
+            if chd == self._last_stream_chd:
                 continue
             self._last_stream_chd = chd
             if chd == 0:
@@ -250,9 +253,32 @@ class AD7193:
             elif chd == 1:
                 q_v = self._raw_to_voltage(raw)
 
+        # Stage 2: conservative fallback to avoid timeout on jittery systems.
+        while time.monotonic() < deadline and (i_v is None or q_v is None):
+            rem = max(0.001, deadline - time.monotonic())
+            if not self._wait_ready(timeout_s=min(0.05, rem), poll_sleep_s=0.00002):
+                continue
+            d32 = self._read_reg(_REG_DATA, 4)
+            raw = (d32 >> 8) & 0xFFFFFF
+            chd = d32 & 0x0F
+            self._last_stream_chd = chd
+            if chd == 0:
+                i_v = self._raw_to_voltage(raw)
+            elif chd == 1:
+                q_v = self._raw_to_voltage(raw)
+
         if i_v is None or q_v is None:
-            self._log("AD7193: stream timeout waiting for I/Q", "ERROR")
-            return (i_v if i_v is not None else 0.0), (q_v if q_v is not None else 0.0)
+            self._stream_timeout_count += 1
+            if (self._stream_timeout_count % 25) == 1:
+                self._log("AD7193: stream timeout waiting for I/Q (using last valid sample)", "WARNING")
+            if i_v is None:
+                i_v = self._last_i_v
+            if q_v is None:
+                q_v = self._last_q_v
+            return i_v, q_v
+
+        self._last_i_v = i_v
+        self._last_q_v = q_v
         return i_v, q_v
 
     # ------------------------------------------------------------------
