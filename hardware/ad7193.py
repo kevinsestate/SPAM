@@ -39,6 +39,7 @@ _MODE_SINGLE = 0x200000  # Single conversion mode
 _MODE_IDLE   = 0x400000  # Idle mode
 _MODE_CONT   = 0x000000  # Continuous conversion mode
 _MODE_CLK_INT = 0x080000  # CLK1=1, CLK0=0 (internal 4.92 MHz clock)
+_MODE_DAT_STA = 0x100000  # Append status byte to data reads
 
 # Config register bits
 _CONFIG_CHOP_DIS = 0x000000  # Chop disabled
@@ -56,6 +57,7 @@ _DIFF_CH = {0: 0x0100, 1: 0x0200}
 
 # Reference voltage (Pmod AD5 uses external 2.5V reference)
 _VREF = 2.5
+_MCLK_HZ = 4_915_200.0
 
 
 class AD7193:
@@ -79,6 +81,11 @@ class AD7193:
         self._gain = 1
         self._data_rate = 96
         self._sim_angle = 0.0  # used for simulation sweep
+        self._fs_val = 1
+        self._mode_single_val = _MODE_SINGLE | _MODE_CLK_INT | self._fs_val
+        self._base_config = _CONFIG_REFSEL | _CONFIG_BUF
+        self._config_by_channel = {}
+        self._streaming = False
 
         if self._sim:
             self._spi = None
@@ -133,6 +140,26 @@ class AD7193:
         else:
             self._log(f"AD7193: ID=0x{id_val:02X} verified", "INFO")
 
+    def _fs_from_data_rate(self, data_rate_hz):
+        # AD7193 nominal: output_rate ~= (MCLK / 1024) / FS
+        rate = max(0.1, float(data_rate_hz))
+        fs = int((_MCLK_HZ / 1024.0) / rate)
+        return max(1, min(1023, fs))
+
+    def _raw_to_voltage(self, raw):
+        # Bipolar, offset-binary output coding.
+        return ((raw / 8388608.0) - 1.0) * _VREF / self._gain
+
+    def _wait_ready(self, timeout_s=0.5, poll_sleep_s=0.0002):
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status = self._read_reg(_REG_STATUS, 1)
+            if not (status & 0x80):  # RDY active-low
+                return True
+            if poll_sleep_s > 0:
+                time.sleep(poll_sleep_s)
+        return False
+
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
@@ -156,19 +183,69 @@ class AD7193:
             return
 
         gain_bits = _GAIN_MAP.get(gain, 0)
+        self._streaming = False
+        self._fs_val = self._fs_from_data_rate(data_rate)
+        self._mode_single_val = _MODE_SINGLE | _MODE_CLK_INT | (self._fs_val & 0x3FF)
+        self._base_config = _CONFIG_REFSEL | _CONFIG_BUF | gain_bits
+        self._config_by_channel = {
+            0: self._base_config | _DIFF_CH[0],
+            1: self._base_config | _DIFF_CH[1],
+        }
 
-        # FS value from desired data rate (approximate)
-        fs_val = max(1, min(1023, int(4_800_000 / (128 * data_rate))))
+        # Prime ADC registers.
+        self._write_reg(_REG_MODE, self._mode_single_val, 3)
+        self._write_reg(_REG_CONFIG, self._base_config, 3)
 
-        # Mode register: single conversion, internal clock, no averaging
-        mode_val = _MODE_SINGLE | _MODE_CLK_INT | (fs_val & 0x3FF)
-        self._write_reg(_REG_MODE, mode_val, 3)
+        realized = (_MCLK_HZ / 1024.0) / self._fs_val
+        self._log(
+            f"AD7193 config: gain={gain}, FS={self._fs_val}, req_rate={data_rate}Hz "
+            f"realized~{realized:.1f}Hz",
+            "INFO",
+        )
 
-        # Config register: channel selection done per-read, gain, buffered, differential
-        config_val = _CONFIG_REFSEL | _CONFIG_BUF | gain_bits
-        self._write_reg(_REG_CONFIG, config_val, 3)
+    def start_iq_stream(self):
+        """Enable continuous conversions on both channels (throughput mode)."""
+        if self._sim:
+            return
+        stream_cfg = self._base_config | _DIFF_CH[0] | _DIFF_CH[1]
+        stream_mode = _MODE_CONT | _MODE_CLK_INT | _MODE_DAT_STA | (self._fs_val & 0x3FF)
+        self._write_reg(_REG_CONFIG, stream_cfg, 3)
+        self._write_reg(_REG_MODE, stream_mode, 3)
+        self._streaming = True
 
-        self._log(f"AD7193 config: gain={gain}, FS={fs_val}, rate~{data_rate}Hz", "INFO")
+    def stop_stream(self):
+        """Return ADC to idle mode from streaming mode."""
+        if self._sim:
+            return
+        self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
+        self._streaming = False
+
+    def read_iq_stream(self, timeout_s=0.5):
+        """Read I/Q using channel sequencer in continuous conversion mode."""
+        if self._sim:
+            return self._sim_voltage(0), self._sim_voltage(1)
+        if not self._streaming:
+            self.start_iq_stream()
+
+        i_v = None
+        q_v = None
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and (i_v is None or q_v is None):
+            if not self._wait_ready(timeout_s=0.2, poll_sleep_s=0.00005):
+                continue
+            d32 = self._read_reg(_REG_DATA, 4)  # D23..D0 + status (DAT_STA enabled)
+            raw = (d32 >> 8) & 0xFFFFFF
+            st = d32 & 0xFF
+            chd = st & 0x0F
+            if chd == 0:
+                i_v = self._raw_to_voltage(raw)
+            elif chd == 1:
+                q_v = self._raw_to_voltage(raw)
+
+        if i_v is None or q_v is None:
+            self._log("AD7193: stream timeout waiting for I/Q", "ERROR")
+            return (i_v if i_v is not None else 0.0), (q_v if q_v is not None else 0.0)
+        return i_v, q_v
 
     # ------------------------------------------------------------------
     # Reading
@@ -189,36 +266,22 @@ class AD7193:
         if self._sim:
             return self._sim_voltage(channel)
 
-        ch_bits = _DIFF_CH.get(channel, _DIFF_CH[0])
-        gain_bits = _GAIN_MAP.get(self._gain, 0)
-
-        # Write config with selected channel
-        config_val = _CONFIG_REFSEL | _CONFIG_BUF | ch_bits | gain_bits
+        self._streaming = False
+        config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
 
         # Start single conversion
-        fs_val = max(1, min(1023, int(4_800_000 / (128 * self._data_rate))))
-        mode_val = _MODE_SINGLE | _MODE_CLK_INT | (fs_val & 0x3FF)
-        self._write_reg(_REG_MODE, mode_val, 3)
+        self._write_reg(_REG_MODE, self._mode_single_val, 3)
 
         # Wait for conversion (poll status register RDY bit)
-        timeout = time.time() + 1.0
-        while time.time() < timeout:
-            status = self._read_reg(_REG_STATUS, 1)
-            if not (status & 0x80):  # RDY bit is active-low
-                break
-            time.sleep(0.001)
-        else:
+        if not self._wait_ready(timeout_s=0.7, poll_sleep_s=0.0001):
             self._log(f"AD7193: timeout reading ch{channel}", "ERROR")
             return 0.0
 
         # Read 24-bit data
         raw = self._read_reg(_REG_DATA, 3)
 
-        # Convert to voltage: bipolar, code is offset binary
-        # V = ((raw / 2^23) - 1) * Vref / gain
-        voltage = ((raw / 8388608.0) - 1.0) * _VREF / self._gain
-        return voltage
+        return self._raw_to_voltage(raw)
 
     def read_iq(self):
         """Read both I and Q differential channels.

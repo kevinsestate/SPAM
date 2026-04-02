@@ -4,6 +4,7 @@ Usage examples:
   python scripts/pi/live_adc_view.py
   python scripts/pi/live_adc_view.py --mode low-noise
   python scripts/pi/live_adc_view.py --mode max-rate --no-plot --duration 10
+  python scripts/pi/live_adc_view.py --benchmark-raw --duration 10
   python scripts/pi/live_adc_view.py --spi-speed 100000 --data-rate 96 --target-hz 20
 """
 
@@ -35,6 +36,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--window-sec", type=float, default=20.0, help="Plot window in seconds")
     p.add_argument("--no-plot", action="store_true", help="Disable matplotlib chart")
     p.add_argument("--mode", choices=["low-noise", "max-rate"], default="low-noise", help="Operating mode")
+    p.add_argument("--acq-mode", choices=["auto", "single", "stream"], default="auto",
+                   help="ADC acquisition backend")
+    p.add_argument("--benchmark-raw", action="store_true",
+                   help="Benchmark acquisition only (disables filters, plot, frequent output)")
     p.add_argument("--print-hz", type=float, default=4.0, help="Terminal refresh rate")
     p.add_argument("--plot-hz", type=float, default=8.0, help="Plot refresh rate")
     p.add_argument("--median-window", type=int, default=5, help="Low-noise median window size (odd number preferred)")
@@ -110,13 +115,23 @@ def main() -> int:
     try:
         adc = AD7193(args.spi_bus, args.spi_cs, args.spi_speed, log_fn=log_fn)
         adc.configure(gain=args.gain, data_rate=args.data_rate)
+        if args.acq_mode == "auto":
+            use_stream = (args.mode == "max-rate") or args.benchmark_raw
+        else:
+            use_stream = (args.acq_mode == "stream")
+        if use_stream and not adc.is_simulated:
+            adc.start_iq_stream()
         print(
             f"[INFO] configured spi={args.spi_bus}.{args.spi_cs} speed={args.spi_speed} "
             f"gain={args.gain} rate={args.data_rate}Hz simulated={adc.is_simulated}"
         )
-        print(f"[INFO] mode={args.mode}  print_hz={args.print_hz}  plot_hz={args.plot_hz}")
+        print(f"[INFO] mode={args.mode} acq_mode={'stream' if use_stream else 'single'} "
+              f"print_hz={args.print_hz} plot_hz={args.plot_hz} benchmark_raw={args.benchmark_raw}")
         print("[INFO] Channels: CH0=I (AIN1+/AIN1-), CH1=Q (AIN2+/AIN2-)")
         print("[INFO] Press Ctrl+C to stop.\n")
+
+        if args.benchmark_raw:
+            show_plot = False
 
         if show_plot and plt is not None:
             plt.ion()
@@ -157,7 +172,10 @@ def main() -> int:
             if args.duration > 0 and t >= args.duration:
                 break
 
-            i_v, q_v = adc.read_iq()
+            if use_stream:
+                i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
+            else:
+                i_v, q_v = adc.read_iq()
             i_mv_raw = i_v * 1000.0
             q_mv_raw = q_v * 1000.0
             mag_mv_raw = math.sqrt(i_mv_raw * i_mv_raw + q_mv_raw * q_mv_raw)
@@ -165,7 +183,7 @@ def main() -> int:
             raw_q_mv.append(q_mv_raw)
             raw_mag_mv.append(mag_mv_raw)
 
-            if args.mode == "low-noise":
+            if args.mode == "low-noise" and not args.benchmark_raw:
                 med_i.append(i_mv_raw)
                 med_q.append(q_mv_raw)
                 i_med = statistics.median(med_i)
@@ -212,7 +230,7 @@ def main() -> int:
             else:
                 acq_rate = 0.0
 
-            if (now - last_print) >= print_dt:
+            if (not args.benchmark_raw) and (now - last_print) >= print_dt:
                 render_count += 1
                 print_rate = render_count / max(1e-9, t)
                 print(
@@ -282,6 +300,7 @@ def main() -> int:
 
         print("\n=== Summary ===")
         print(f"mode={args.mode}")
+        print(f"benchmark_raw={args.benchmark_raw}")
         print(f"samples={len(raw_i_mv)} elapsed={t_elapsed:.2f}s")
         print(f"rates: acquisition={acq_eff:.2f} Hz  terminal={disp_eff:.2f} Hz  plot={plot_eff:.2f} Hz")
         if args.mode == "low-noise":

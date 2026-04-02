@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-rate", type=int, default=96, help="ADC data rate in Hz")
     p.add_argument("--seconds", type=float, default=15.0, help="Capture duration in seconds")
     p.add_argument("--rate-hz", type=float, default=10.0, help="Sampling print rate in Hz")
+    p.add_argument("--acq-mode", choices=["single", "stream"], default="single",
+                   help="ADC acquisition backend to test")
     p.add_argument("--csv", type=str, default="", help="Optional CSV output path")
     return p.parse_args()
 
@@ -52,16 +54,21 @@ def main() -> int:
     try:
         adc = AD7193(args.spi_bus, args.spi_cs, args.spi_speed, log_fn=log_fn)
         adc.configure(gain=args.gain, data_rate=args.data_rate)
+        if args.acq_mode == "stream" and not adc.is_simulated:
+            adc.start_iq_stream()
         print(
             f"[INFO] configured spi={args.spi_bus}.{args.spi_cs} speed={args.spi_speed} "
-            f"gain={args.gain} rate={args.data_rate}Hz simulated={adc.is_simulated}"
+            f"gain={args.gain} rate={args.data_rate}Hz acq_mode={args.acq_mode} simulated={adc.is_simulated}"
         )
 
         dt = 1.0 / max(args.rate_hz, 0.1)
         start = time.time()
         while time.time() - start < args.seconds:
             t = time.time() - start
-            i_v, q_v = adc.read_iq()
+            if args.acq_mode == "stream":
+                i_v, q_v = adc.read_iq_stream(timeout_s=0.5)
+            else:
+                i_v, q_v = adc.read_iq()
             mag = math.sqrt(i_v * i_v + q_v * q_v)
             log_records.append((t, i_v, q_v, mag))
             finite = math.isfinite(i_v) and math.isfinite(q_v) and math.isfinite(mag)
