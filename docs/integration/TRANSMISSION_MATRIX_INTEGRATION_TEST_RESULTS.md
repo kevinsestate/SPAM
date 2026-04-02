@@ -6,11 +6,11 @@ Scope: Transmission-matrix math, inverse extraction, and GUI integration path
 ## Scope Clarification
 
 This file covers only transmission-matrix integration.  
-Hardware ADC/RF-switch validation is tracked separately in `INTEGRATION_TEST_RESULTS.md`.
+Hardware ADC/RF-switch validation is tracked separately in [`INTEGRATION_TEST_RESULTS.md`](INTEGRATION_TEST_RESULTS.md).
 
 ## What Was Executed  
 
-### 1) Forward-model and S->T validation (`test_spam_calc.py`)
+### 1) Forward-model and S->T validation (`tests/test_spam_calc.py`)
 
 Executed logic:
 - Loads simulated `.mat` datasets from `Simulated Spam Calculations/`
@@ -22,7 +22,7 @@ Executed logic:
   - `tmatrix_error(T_meas, T_theory)`
 
 Evidence in code:
-- Dataset loader and case list: `test_spam_calc.py`
+- Dataset loader and case list: `tests/test_spam_calc.py`
 - S->T conversion function: `spam_calc.py`
 - Forward model function: `spam_calc.py`
 
@@ -32,7 +32,7 @@ Observed summary:
 - Validation case set covers 10 simulated material files (including complex/full-tensor cases).
 - Reported benchmark behavior in project notes: approximately <=0.1% relative T-matrix error vs MATLAB reference flow.
 
-### 2) Inverse extraction validation (`test_optimizer.py`)
+### 2) Inverse extraction validation (`tests/test_optimizer.py`)
 
 Executed logic:
 - Loads simulated SPAM data from `Simulated Spam Calculations/`
@@ -41,7 +41,7 @@ Executed logic:
 - Exercises staged solve path (isotropic -> diagonal -> symmetric) depending on target.
 
 Evidence in code:
-- Test harness and test cases: `test_optimizer.py`
+- Test harness and test cases: `tests/test_optimizer.py`
 - Progressive solver implementation: `spam_optimizer.py`
 
 Result status: PASS (representative simulated extraction cases)

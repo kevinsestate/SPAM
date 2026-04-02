@@ -55,7 +55,7 @@ Optional explicit config:
 python scripts/pi/check_adc_lowlevel.py \
   --spi-bus 0 --spi-cs 0 --spi-speed 1000000 \
   --gain 1 --data-rate 96 --seconds 20 --rate-hz 10 \
-  --csv benchmark_artifacts/pi_adc_iq.csv
+  --csv ./pi_adc_iq.csv
 ```
 
 Pass criteria:

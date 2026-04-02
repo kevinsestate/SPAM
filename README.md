@@ -47,11 +47,13 @@ SPAM/
 ├── requirements.txt        # Legacy dependency list
 ├── start_spam.sh           # Startup script for Linux/Raspberry Pi
 ├── start_spam.bat          # Startup script for Windows
+├── spam_config.json        # GUI / ADC connection defaults (local)
 ├── spam_calc.py            # Backward-compat shim -> core/
 ├── spam_optimizer.py       # Backward-compat shim -> core/
 ├── core/
 │   ├── spam_calc.py        # Transmission-matrix math (forward + S->T)
 │   └── spam_optimizer.py   # Progressive inverse extraction
+├── docs/                   # Handoff, benchmarks, integration notes, hardware PDFs (see docs/README.md)
 ├── gui/
 │   ├── themes.py           # Theme palettes and fonts
 │   ├── widgets.py          # Styled widget factory
@@ -79,9 +81,11 @@ SPAM/
 │   ├── *.mat               # Simulated validation datasets
 │   └── *.m                 # MATLAB reference scripts
 ├── archive/
-│   └── legacy/             # Non-active archived artifacts
+│   └── legacy/             # Non-active archived artifacts (includes old GUI snapshots)
 └── README.md
 ```
+
+Local runtime files (often gitignored): `spam.db`, `venv/`, `__pycache__/`, `spam_scanner.egg-info/`.
 
 ### Raspberry Pi ADC scripts (`scripts/pi/`)
 
@@ -522,11 +526,14 @@ The application uses a mixin-based architecture:
 
 ### Testing
 
-Run the application and test:
-- Calibration functionality
-- Measurement start/stop
-- Data export (JSON and CSV)
-- Graph updates with real data
+**Automated math checks** (from repo root):
+
+```bash
+python tests/test_spam_calc.py
+python tests/test_optimizer.py
+```
+
+**Manual / GUI:** calibration, measurement start/stop, export (JSON/CSV), live graphs.
 
 ## Notes
 
@@ -535,16 +542,12 @@ Run the application and test:
 - The application is designed to run standalone on a Raspberry Pi
 - The web frontend (React) and FastAPI backend are no longer needed for local operation
 
-## Integration Testing
+## Integration testing and reports
 
-For detailed integration test plans and rubrics, see [INTEGRATION_TEST_PLAN.md](INTEGRATION_TEST_PLAN.md).
-
-The integration test plan includes:
-- Motor control and measurement sweep integration tests
-- Calibration process integration tests
-- Manual motor control and I2C communication verification
-- Quantitative success criteria for each test
-- Test execution logs and assessment rubrics
+- **Transmission-matrix / extraction (simulation):** [docs/integration/TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md](docs/integration/TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md)
+- **ADC / RF switch software bring-up (hardware scope):** [docs/integration/INTEGRATION_TEST_RESULTS.md](docs/integration/INTEGRATION_TEST_RESULTS.md)
+- **Benchmark summary + LaTeX report:** [docs/benchmarks/benchmark_results.md](docs/benchmarks/benchmark_results.md), [docs/benchmarks/benchmark_report.tex](docs/benchmarks/benchmark_report.tex)
+- **Index of all docs:** [docs/README.md](docs/README.md)
 
 ## License
 

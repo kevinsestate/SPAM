@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-04-02 (ADC throughput notes + Pi C++ benchmarks)
+Last updated: 2026-04-02 (ADC throughput notes + Pi C++ benchmarks + docs layout cleanup)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -37,6 +37,7 @@ Active runtime path:
 - Persistence: `backend/` (relative imports, re-exports from `__init__.py`)
 - Hardware integration: `hardware/`
 - Tests: `tests/`
+- Documentation: `docs/` (see `docs/README.md` — handoff, benchmarks, integration reports, hardware reference PDFs)
 
 ---
 
@@ -89,10 +90,10 @@ Active runtime path:
 Status: implemented and benchmarked on simulated datasets.
 
 Key files:
-- `TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md`
-- `benchmark_results.md`
-- `benchmark_report.tex` (Overleaf-ready academic report)
-- `benchmark_artifacts/` (raw outputs + environment)
+- `docs/integration/TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md`
+- `docs/benchmarks/benchmark_results.md`
+- `docs/benchmarks/benchmark_report.tex` (Overleaf-ready academic report)
+- `docs/benchmarks/artifacts/` (raw outputs + environment)
 
 Latest fresh benchmark snapshot (2026-03-26):
 - Forward (10 datasets): mean-of-means error `0.0009643`, worst-case max `0.004535`
@@ -117,7 +118,7 @@ Behavior:
 Status: software + simulation path validated; full hardware-in-loop validation pending.
 
 Reference:
-- `INTEGRATION_TEST_RESULTS.md` (hardware-only scope)
+- `docs/integration/INTEGRATION_TEST_RESULTS.md` (hardware-only scope)
 
 ## Current Truth (As of Latest Run)
 
@@ -145,7 +146,7 @@ Reference:
 
 ## Next Chat Bootstrap Checklist
 
-1. Read this file plus `docs/HANDOFF_STATUS.md`.
+1. Read this file plus `docs/HANDOFF_STATUS.md` and `docs/README.md` (doc index).
 2. Confirm `hardware/ad7193.py` includes low-nibble ID check and internal-clock mode writes.
 3. Re-run short Pi ADC loop and confirm no channel timeouts + finite I/Q.
 4. Treat extraction outputs as provisional until teammate calibration math is merged.
@@ -181,9 +182,9 @@ python tests/test_optimizer.py
 
 ### Benchmark/report artifacts
 
-- Raw outputs: `benchmark_artifacts/`
-- Parsed summary: `benchmark_results.md`
-- Academic report: `benchmark_report.tex`
+- Raw outputs: `docs/benchmarks/artifacts/`
+- Parsed summary: `docs/benchmarks/benchmark_results.md`
+- Academic report: `docs/benchmarks/benchmark_report.tex`
 
 ### Pi ADC bring-up helpers
 
@@ -196,6 +197,20 @@ python tests/test_optimizer.py
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-04-02 - Repository layout cleanup (docs consolidation)
+- Changed:
+  - Moved hardware reference PDFs and Pi pinout image to `docs/reference/hardware/`.
+  - Moved benchmarks to `docs/benchmarks/` (`benchmark_results.md`, `benchmark_report.tex`, `artifacts/`).
+  - Moved integration write-ups to `docs/integration/`.
+  - Added `docs/README.md` as documentation index.
+  - Removed duplicate root `test_spam_calc.py` and `test_optimizer.py` (use `tests/` only).
+  - Renamed `archive/legacy/New folder` → `archive/legacy/matlab_snippets_archived`.
+  - Updated cross-links in `README.md`, `REPO_CONTEXT.md`, `scripts/pi/PI_ADC_BRINGUP.md`, moved docs, tests, and `benchmark_report.tex`.
+- Verified:
+  - `backend/database.py` still uses repo-root `spam.db` (unchanged).
+- Risks/follow-up:
+  - External bookmarks to old root paths for PDFs/reports need updating.
 
 ### 2026-04-02 - Pi ADC throughput documentation + C++ AD7193 benchmark
 - Changed:

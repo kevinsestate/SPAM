@@ -4,9 +4,9 @@ This file summarizes fresh benchmark runs executed from the current codebase.
 
 ## Reproducibility Artifacts
 
-- Environment: `benchmark_artifacts/environment.txt`
-- Forward-path output: `benchmark_artifacts/test_spam_calc_output.txt`
-- Optimizer output: `benchmark_artifacts/test_optimizer_output.txt`
+- Environment: `artifacts/environment.txt`
+- Forward-path output: `artifacts/test_spam_calc_output.txt`
+- Optimizer output: `artifacts/test_optimizer_output.txt`
 
 ## Runtime Environment
 
@@ -18,8 +18,8 @@ This file summarizes fresh benchmark runs executed from the current codebase.
 ## Commands Executed
 
 ```powershell
-python test_spam_calc.py
-python test_optimizer.py
+python tests/test_spam_calc.py
+python tests/test_optimizer.py
 ```
 
 ## A) Forward Path Benchmark (`test_spam_calc.py`)

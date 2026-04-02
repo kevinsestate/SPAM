@@ -7,7 +7,7 @@ Project: SPAM (AD7193/Pmod AD5 + Cobham RF Switch integration)
 
 This document records how the new ADC/switch integration was tested so far, what passed, and what is still pending.
 
-Transmission-matrix integration results are documented separately in `TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md`.
+Transmission-matrix integration results are documented separately in [`TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md`](TRANSMISSION_MATRIX_INTEGRATION_TEST_RESULTS.md).
 
 ## Test Scope Completed
 

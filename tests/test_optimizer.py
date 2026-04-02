@@ -2,7 +2,7 @@
 Validate the inverse solver against simulated HFSS data.
 
 Usage:
-    python test_optimizer.py
+    python tests/test_optimizer.py
 """
 
 import os

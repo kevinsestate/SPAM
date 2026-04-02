@@ -6,7 +6,7 @@ Loads the simulated HFSS .mat files, computes T-matrices via both paths
 that should reproduce MATLAB's Compare_Tmat.m output.
 
 Usage:
-    python test_spam_calc.py
+    python tests/test_spam_calc.py
 """
 
 import os
