@@ -1,10 +1,10 @@
-"""Live AD7193 ADC viewer (terminal + optional chart).
+"""Live AD7193 ADC viewer (low-noise + max-rate modes).
 
 Usage examples:
   python scripts/pi/live_adc_view.py
-  python scripts/pi/live_adc_view.py --spi-speed 100000 --target-hz 12
-  python scripts/pi/live_adc_view.py --duration 0 --window-sec 30
-  python scripts/pi/live_adc_view.py --no-plot
+  python scripts/pi/live_adc_view.py --mode low-noise
+  python scripts/pi/live_adc_view.py --mode max-rate --no-plot --duration 10
+  python scripts/pi/live_adc_view.py --spi-speed 100000 --data-rate 96 --target-hz 12
 """
 
 from __future__ import annotations
@@ -30,11 +30,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--spi-speed", type=int, default=100_000, help="SPI speed Hz (default: 100000)")
     p.add_argument("--gain", type=int, default=1, choices=[1, 8, 16, 32, 64, 128], help="ADC gain")
     p.add_argument("--data-rate", type=int, default=96, help="ADC data rate in Hz")
-    p.add_argument("--target-hz", type=float, default=12.0, help="Target UI sample rate in Hz")
+    p.add_argument("--target-hz", type=float, default=12.0, help="Target acquisition rate in Hz (ignored in max-rate mode)")
     p.add_argument("--duration", type=float, default=0.0, help="Seconds to run (0 = run until Ctrl+C)")
     p.add_argument("--window-sec", type=float, default=20.0, help="Plot window in seconds")
     p.add_argument("--no-plot", action="store_true", help="Disable matplotlib chart")
+    p.add_argument("--mode", choices=["low-noise", "max-rate"], default="low-noise", help="Operating mode")
+    p.add_argument("--print-hz", type=float, default=4.0, help="Terminal refresh rate")
+    p.add_argument("--plot-hz", type=float, default=10.0, help="Plot refresh rate")
+    p.add_argument("--median-window", type=int, default=5, help="Low-noise median window size (odd number preferred)")
+    p.add_argument("--ema-alpha", type=float, default=0.25, help="Low-noise EMA alpha (0..1)")
+    p.add_argument("--spike-threshold-mv", type=float, default=250.0, help="Spike reject threshold in mV (<=0 disables)")
     return p.parse_args()
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _safe_stats(values: list[float]) -> tuple[float, float, float, float]:
+    if not values:
+        return 0.0, 0.0, 0.0, 0.0
+    return statistics.mean(values), statistics.pstdev(values), min(values), max(values)
 
 
 def main() -> int:
@@ -57,13 +73,35 @@ def main() -> int:
             print(f"[WARN] Matplotlib unavailable ({exc}); continuing in terminal mode.")
             show_plot = False
 
+    # Rolling display buffers (filtered values for cleaner demo).
     t_buf: deque[float] = deque()
     i_buf_mv: deque[float] = deque()
     q_buf_mv: deque[float] = deque()
 
-    all_i_mv: list[float] = []
-    all_q_mv: list[float] = []
-    all_mag_mv: list[float] = []
+    # Raw capture for diagnostics.
+    raw_i_mv: list[float] = []
+    raw_q_mv: list[float] = []
+    raw_mag_mv: list[float] = []
+
+    # Display (post-filter) capture.
+    disp_i_mv: list[float] = []
+    disp_q_mv: list[float] = []
+    disp_mag_mv: list[float] = []
+
+    # Low-noise filter state.
+    med_n = max(1, int(args.median_window))
+    med_i: deque[float] = deque(maxlen=med_n)
+    med_q: deque[float] = deque(maxlen=med_n)
+    ema_i: float | None = None
+    ema_q: float | None = None
+    alpha = _clamp(float(args.ema_alpha), 0.01, 1.0)
+    spike_thr = float(args.spike_threshold_mv)
+    spike_rejects = 0
+
+    # Rate tracking.
+    t_acq: deque[float] = deque(maxlen=2048)
+    render_count = 0
+    plot_count = 0
 
     def log_fn(msg: str, lvl: str) -> None:
         print(f"[{lvl}] {msg}")
@@ -76,6 +114,7 @@ def main() -> int:
             f"[INFO] configured spi={args.spi_bus}.{args.spi_cs} speed={args.spi_speed} "
             f"gain={args.gain} rate={args.data_rate}Hz simulated={adc.is_simulated}"
         )
+        print(f"[INFO] mode={args.mode}  print_hz={args.print_hz}  plot_hz={args.plot_hz}")
         print("[INFO] Channels: CH0=I (AIN1+/AIN1-), CH1=Q (AIN2+/AIN2-)")
         print("[INFO] Press Ctrl+C to stop.\n")
 
@@ -92,9 +131,13 @@ def main() -> int:
             ax.legend(loc="upper right")
             fig.tight_layout()
 
-        dt = 1.0 / max(args.target_hz, 0.5)
+        acq_dt = 0.0 if args.mode == "max-rate" else (1.0 / max(args.target_hz, 0.5))
+        print_dt = 1.0 / max(args.print_hz, 0.2)
+        plot_dt = 1.0 / max(args.plot_hz, 0.2)
+
         t0 = time.monotonic()
         last_print = 0.0
+        last_plot = 0.0
 
         while True:
             now = time.monotonic()
@@ -103,41 +146,77 @@ def main() -> int:
                 break
 
             i_v, q_v = adc.read_iq()
-            i_mv = i_v * 1000.0
-            q_mv = q_v * 1000.0
+            i_mv_raw = i_v * 1000.0
+            q_mv_raw = q_v * 1000.0
+            mag_mv_raw = math.sqrt(i_mv_raw * i_mv_raw + q_mv_raw * q_mv_raw)
+            raw_i_mv.append(i_mv_raw)
+            raw_q_mv.append(q_mv_raw)
+            raw_mag_mv.append(mag_mv_raw)
+
+            if args.mode == "low-noise":
+                med_i.append(i_mv_raw)
+                med_q.append(q_mv_raw)
+                i_med = statistics.median(med_i)
+                q_med = statistics.median(med_q)
+
+                if ema_i is None:
+                    ema_i = i_med
+                    ema_q = q_med
+                else:
+                    cand_i = ema_i + alpha * (i_med - ema_i)
+                    cand_q = ema_q + alpha * (q_med - ema_q)
+                    if spike_thr > 0 and abs(cand_i - ema_i) > spike_thr:
+                        spike_rejects += 1
+                        cand_i = ema_i
+                    if spike_thr > 0 and abs(cand_q - ema_q) > spike_thr:
+                        spike_rejects += 1
+                        cand_q = ema_q
+                    ema_i, ema_q = cand_i, cand_q
+
+                i_mv = float(ema_i)
+                q_mv = float(ema_q)
+            else:
+                i_mv = i_mv_raw
+                q_mv = q_mv_raw
+
             mag_mv = math.sqrt(i_mv * i_mv + q_mv * q_mv)
             d_mv = i_mv - q_mv
+
+            disp_i_mv.append(i_mv)
+            disp_q_mv.append(q_mv)
+            disp_mag_mv.append(mag_mv)
 
             t_buf.append(t)
             i_buf_mv.append(i_mv)
             q_buf_mv.append(q_mv)
-            all_i_mv.append(i_mv)
-            all_q_mv.append(q_mv)
-            all_mag_mv.append(mag_mv)
-
             while t_buf and (t - t_buf[0]) > args.window_sec:
                 t_buf.popleft()
                 i_buf_mv.popleft()
                 q_buf_mv.popleft()
 
-            n_win = len(t_buf)
-            if n_win >= 2:
-                rate = (n_win - 1) / max(1e-9, (t_buf[-1] - t_buf[0]))
+            t_acq.append(now)
+            if len(t_acq) >= 2:
+                acq_rate = (len(t_acq) - 1) / max(1e-9, (t_acq[-1] - t_acq[0]))
             else:
-                rate = 0.0
+                acq_rate = 0.0
 
-            # Print at ~4 Hz so terminal stays readable.
-            if (now - last_print) >= 0.25:
+            if (now - last_print) >= print_dt:
+                render_count += 1
+                print_rate = render_count / max(1e-9, t)
                 print(
                     f"\rt={t:7.2f}s  I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  "
                     f"Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV  "
-                    f"N={len(all_i_mv):5d}  ~{rate:5.2f} samp/s",
+                    f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f}Hz  disp~{print_rate:5.2f}Hz",
                     end="",
                     flush=True,
                 )
                 last_print = now
 
-            if show_plot and plt is not None and ax is not None and ln_i is not None and ln_q is not None:
+            if (
+                show_plot and plt is not None and ax is not None and ln_i is not None and ln_q is not None
+                and (now - last_plot) >= plot_dt
+            ):
+                plot_count += 1
                 tx = list(t_buf)
                 iy = list(i_buf_mv)
                 qy = list(q_buf_mv)
@@ -149,31 +228,55 @@ def main() -> int:
                     ymax = max(max(iy), max(qy))
                     ax.set_ylim(0.0, max(1000.0, ymax + 80.0))
                 plt.pause(0.001)
+                last_plot = now
 
-            time.sleep(dt)
+            if acq_dt > 0:
+                time.sleep(acq_dt)
 
         print()  # newline after carriage-return loop
 
-        if not all_i_mv:
+        if not raw_i_mv:
             print("[ERROR] No samples captured.")
             return 3
 
+        t_elapsed = max(1e-9, time.monotonic() - t0)
+        acq_eff = len(raw_i_mv) / t_elapsed
+        disp_eff = render_count / t_elapsed
+        plot_eff = (plot_count / t_elapsed) if show_plot else 0.0
+
+        i_mu, i_sd, i_min, i_max = _safe_stats(raw_i_mv)
+        q_mu, q_sd, q_min, q_max = _safe_stats(raw_q_mv)
+        m_mu, m_sd, m_min, m_max = _safe_stats(raw_mag_mv)
+        fi_mu, fi_sd, fi_min, fi_max = _safe_stats(disp_i_mv)
+        fq_mu, fq_sd, fq_min, fq_max = _safe_stats(disp_q_mv)
+        fm_mu, fm_sd, fm_min, fm_max = _safe_stats(disp_mag_mv)
+
         print("\n=== Summary ===")
-        print(f"samples={len(all_i_mv)}")
-        print(
-            "I(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(
-                statistics.mean(all_i_mv), statistics.pstdev(all_i_mv), min(all_i_mv), max(all_i_mv)
+        print(f"mode={args.mode}")
+        print(f"samples={len(raw_i_mv)} elapsed={t_elapsed:.2f}s")
+        print(f"rates: acquisition={acq_eff:.2f} Hz  terminal={disp_eff:.2f} Hz  plot={plot_eff:.2f} Hz")
+        if args.mode == "low-noise":
+            print(
+                f"filters: median_window={med_n} ema_alpha={alpha:.3f} "
+                f"spike_threshold_mV={spike_thr:.1f} spike_rejects={spike_rejects}"
             )
+        print(
+            "RAW I(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(i_mu, i_sd, i_min, i_max)
         )
         print(
-            "Q(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(
-                statistics.mean(all_q_mv), statistics.pstdev(all_q_mv), min(all_q_mv), max(all_q_mv)
-            )
+            "RAW Q(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(q_mu, q_sd, q_min, q_max)
         )
         print(
-            "|IQ|(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(
-                statistics.mean(all_mag_mv), statistics.pstdev(all_mag_mv), min(all_mag_mv), max(all_mag_mv)
-            )
+            "RAW |IQ|(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(m_mu, m_sd, m_min, m_max)
+        )
+        print(
+            "DSP I(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(fi_mu, fi_sd, fi_min, fi_max)
+        )
+        print(
+            "DSP Q(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(fq_mu, fq_sd, fq_min, fq_max)
+        )
+        print(
+            "DSP |IQ|(mV): mean={:.2f} std={:.2f} min={:.2f} max={:.2f}".format(fm_mu, fm_sd, fm_min, fm_max)
         )
 
         if adc.is_simulated:
