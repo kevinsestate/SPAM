@@ -4,7 +4,7 @@ Usage examples:
   python scripts/pi/live_adc_view.py
   python scripts/pi/live_adc_view.py --mode low-noise
   python scripts/pi/live_adc_view.py --mode max-rate --no-plot --duration 10
-  python scripts/pi/live_adc_view.py --spi-speed 100000 --data-rate 96 --target-hz 12
+  python scripts/pi/live_adc_view.py --spi-speed 100000 --data-rate 96 --target-hz 20
 """
 
 from __future__ import annotations
@@ -30,13 +30,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--spi-speed", type=int, default=100_000, help="SPI speed Hz (default: 100000)")
     p.add_argument("--gain", type=int, default=1, choices=[1, 8, 16, 32, 64, 128], help="ADC gain")
     p.add_argument("--data-rate", type=int, default=96, help="ADC data rate in Hz")
-    p.add_argument("--target-hz", type=float, default=12.0, help="Target acquisition rate in Hz (ignored in max-rate mode)")
+    p.add_argument("--target-hz", type=float, default=20.0, help="Target acquisition rate in Hz (ignored in max-rate mode)")
     p.add_argument("--duration", type=float, default=0.0, help="Seconds to run (0 = run until Ctrl+C)")
     p.add_argument("--window-sec", type=float, default=20.0, help="Plot window in seconds")
     p.add_argument("--no-plot", action="store_true", help="Disable matplotlib chart")
     p.add_argument("--mode", choices=["low-noise", "max-rate"], default="low-noise", help="Operating mode")
     p.add_argument("--print-hz", type=float, default=4.0, help="Terminal refresh rate")
-    p.add_argument("--plot-hz", type=float, default=10.0, help="Plot refresh rate")
+    p.add_argument("--plot-hz", type=float, default=8.0, help="Plot refresh rate")
     p.add_argument("--median-window", type=int, default=5, help="Low-noise median window size (odd number preferred)")
     p.add_argument("--ema-alpha", type=float, default=0.25, help="Low-noise EMA alpha (0..1)")
     p.add_argument("--spike-threshold-mv", type=float, default=250.0, help="Spike reject threshold in mV (<=0 disables)")
@@ -64,7 +64,7 @@ def main() -> int:
 
     show_plot = not args.no_plot
     plt = None
-    fig = ax = ln_i = ln_q = None
+    fig = ax_top = ax_bot = ln_i = ln_q = ln_mag = txt_live = None
 
     if show_plot:
         try:
@@ -120,15 +120,27 @@ def main() -> int:
 
         if show_plot and plt is not None:
             plt.ion()
-            fig, ax = plt.subplots(figsize=(9, 4))
-            ln_i, = ax.plot([], [], label="I (mV)", linewidth=1.8)
-            ln_q, = ax.plot([], [], label="Q (mV)", linewidth=1.8)
-            ax.set_title("Live ADC Voltage")
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel("Voltage (mV)")
-            ax.set_ylim(0, 1000)
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc="upper right")
+            fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(11, 5.2), sharex=True)
+            ln_i, = ax_top.plot([], [], label="I (mV)", linewidth=1.8)
+            ln_q, = ax_top.plot([], [], label="Q (mV)", linewidth=1.8)
+            ln_mag, = ax_bot.plot([], [], label="|IQ| (mV)", linewidth=1.8, color="tab:green")
+            ax_top.set_title("Live ADC Voltage")
+            ax_top.set_ylabel("I / Q (mV)")
+            ax_top.set_ylim(0, 1000)
+            ax_top.grid(True, alpha=0.3)
+            ax_top.legend(loc="upper right")
+            txt_live = ax_top.text(
+                0.02, 0.03, "",
+                transform=ax_top.transAxes,
+                ha="left", va="bottom",
+                fontsize=8, family="monospace",
+                bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.85),
+            )
+            ax_bot.set_xlabel("Time (s)")
+            ax_bot.set_ylabel("|IQ| (mV)")
+            ax_bot.set_ylim(0, 1000)
+            ax_bot.grid(True, alpha=0.3)
+            ax_bot.legend(loc="upper right")
             fig.tight_layout()
 
         acq_dt = 0.0 if args.mode == "max-rate" else (1.0 / max(args.target_hz, 0.5))
@@ -213,20 +225,37 @@ def main() -> int:
                 last_print = now
 
             if (
-                show_plot and plt is not None and ax is not None and ln_i is not None and ln_q is not None
+                show_plot
+                and plt is not None
+                and ax_top is not None
+                and ax_bot is not None
+                and ln_i is not None
+                and ln_q is not None
+                and ln_mag is not None
+                and txt_live is not None
                 and (now - last_plot) >= plot_dt
             ):
                 plot_count += 1
                 tx = list(t_buf)
                 iy = list(i_buf_mv)
                 qy = list(q_buf_mv)
+                my = [math.sqrt(i * i + q * q) for i, q in zip(iy, qy)]
                 ln_i.set_data(tx, iy)
                 ln_q.set_data(tx, qy)
+                ln_mag.set_data(tx, my)
                 if tx:
                     x0 = max(0.0, tx[-1] - args.window_sec)
-                    ax.set_xlim(x0, max(x0 + 1.0, tx[-1] + 0.2))
-                    ymax = max(max(iy), max(qy))
-                    ax.set_ylim(0.0, max(1000.0, ymax + 80.0))
+                    x1 = max(x0 + 1.0, tx[-1] + 0.2)
+                    ax_top.set_xlim(x0, x1)
+                    ax_bot.set_xlim(x0, x1)
+                    ymax_iq = max(max(iy), max(qy))
+                    ymax_mag = max(my) if my else 0.0
+                    ax_top.set_ylim(0.0, max(1000.0, ymax_iq + 80.0))
+                    ax_bot.set_ylim(0.0, max(1000.0, ymax_mag + 80.0))
+                    txt_live.set_text(
+                        f"I={i_mv:7.1f} mV  Q={q_mv:7.1f} mV  Δ={d_mv:+7.1f} mV  |IQ|={mag_mv:7.1f} mV\n"
+                        f"N={len(raw_i_mv):5d}  acq~{acq_rate:6.2f} Hz  mode={args.mode}"
+                    )
                 plt.pause(0.001)
                 last_plot = now
 
