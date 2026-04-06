@@ -2,7 +2,7 @@
 
 import tkinter as tk
 
-from .themes import _FONT, _ICON_FONT
+from .themes import _FONT, _MONO, _ICON_FONT
 
 
 class WidgetsMixin:
@@ -31,7 +31,7 @@ class WidgetsMixin:
                         arrowcolor=t['text_sec'], borderwidth=1)
         style.configure("Treeview", background=t['bg_panel'],
                         foreground=t['text'], fieldbackground=t['bg_panel'],
-                        borderwidth=0, font=(_FONT.replace("Segoe UI", "Consolas"), 9))
+                        borderwidth=0, font=(_MONO, 9))
         style.configure("Treeview.Heading", background=t['bg_elevated'],
                         foreground=t['text_sec'], font=(_FONT, 9, "bold"),
                         borderwidth=0)

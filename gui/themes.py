@@ -46,6 +46,13 @@ THEMES = {
     },
 }
 
-_FONT      = "Segoe UI"
-_MONO       = "Consolas"
-_ICON_FONT  = "Segoe UI Symbol"
+import platform as _platform
+
+if _platform.system() == "Windows":
+    _FONT      = "Segoe UI"
+    _MONO      = "Consolas"
+    _ICON_FONT = "Segoe UI Symbol"
+else:
+    _FONT      = "DejaVu Sans"
+    _MONO      = "DejaVu Sans Mono"
+    _ICON_FONT = "DejaVu Sans"
