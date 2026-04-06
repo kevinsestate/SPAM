@@ -60,6 +60,9 @@ class HardwareMixin:
             data_rate = int(self.connection_settings.get('adc_data_rate', '96'))
             self.adc = AD7193(spi_bus, spi_cs, spi_speed, log_fn=self._log_debug)
             self.adc.configure(gain=gain, data_rate=data_rate)
+            if not self.adc.is_simulated:
+                self.adc.start_iq_stream()
+                self._log_debug("ADC stream started", "SUCCESS")
             mode_str = "SIM" if self.adc.is_simulated else "SPI"
             self._log_debug(f"ADC ready ({mode_str})", "SUCCESS")
         except Exception as e:

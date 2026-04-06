@@ -169,6 +169,8 @@ class SPAMGui(
             try: self.motor_gpio.cleanup()
             except: pass
         if self.adc:
+            try: self.adc.stop_stream()
+            except: pass
             try: self.adc.close()
             except: pass
         if self.rf_switch:

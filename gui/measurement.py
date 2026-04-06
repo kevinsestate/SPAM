@@ -58,23 +58,33 @@ class MeasurementMixin:
                 # S21 (transmission): switch to RXt, read I/Q
                 self.rf_switch.select_transmission()
                 time.sleep(0.01)
-                i_tx, q_tx = self.adc.read_iq()
+                if self.adc.is_simulated:
+                    i_tx, q_tx = self.adc.read_iq()
+                else:
+                    i_tx, q_tx = self.adc.read_iq_stream()
 
                 # S11 (reflection): switch to RXp, read I/Q
                 self.rf_switch.select_reflection()
                 time.sleep(0.01)
-                i_rx, q_rx = self.adc.read_iq()
+                if self.adc.is_simulated:
+                    i_rx, q_rx = self.adc.read_iq()
+                else:
+                    i_rx, q_rx = self.adc.read_iq_stream()
             else:
-                # ADC-only mode: expects path state to be handled externally.
+                # ADC-only mode: single I/Q read per point (no RF switch means
+                # both paths see the same physical channels; duplicating the
+                # pair for TX/RX keeps downstream math consistent).
                 if not self._adc_only_hint_logged:
                     self._adc_only_hint_logged = True
                     self.after(0, lambda: self._log_debug(
                         "ADC-only mode active: RF path switching is external/not app-controlled.",
                         "INFO"
                     ))
-                i_tx, q_tx = self.adc.read_iq()
-                time.sleep(0.01)
-                i_rx, q_rx = self.adc.read_iq()
+                if self.adc.is_simulated:
+                    i_tx, q_tx = self.adc.read_iq()
+                else:
+                    i_tx, q_tx = self.adc.read_iq_stream()
+                i_rx, q_rx = i_tx, q_tx
 
             s21_mag = math.sqrt(i_tx**2 + q_tx**2)
             s21_phase = math.degrees(math.atan2(q_tx, i_tx))
