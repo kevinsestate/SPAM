@@ -5,6 +5,7 @@ SPAMGui assembly — combines all mixins into the final application class.
 import tkinter as tk
 import os
 import platform
+import threading
 
 from gui.themes import THEMES
 from gui.widgets import WidgetsMixin
