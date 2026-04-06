@@ -225,7 +225,7 @@ class AD7193:
         self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
         self._streaming = False
 
-    def read_iq_stream(self, timeout_s=0.5, fast_path=True):
+    def read_iq_stream(self, timeout_s=0.1, fast_path=True):
         """Read I/Q using channel sequencer in continuous conversion mode."""
         if self._sim:
             return self._sim_voltage(0), self._sim_voltage(1)
@@ -234,6 +234,7 @@ class AD7193:
 
         i_v = None
         q_v = None
+        self._last_stream_chd = -1
         deadline = time.monotonic() + max(0.01, float(timeout_s))
         fast_deadline = deadline if not fast_path else (time.monotonic() + 0.6 * max(0.01, float(timeout_s)))
 
