@@ -44,9 +44,11 @@ class HardwareMixin:
                         self.after(0, lambda: self._log_debug(f"Motor status error: {e}", "ERROR"))
                 try:
                     GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
-                    self._log_debug("GPIO edge detect on pin {isr_pin} OK", "SUCCESS")
+                    self.motor_isr_available = True
+                    self._log_debug(f"GPIO edge detect on pin {isr_pin} OK", "SUCCESS")
                 except RuntimeError as e:
-                    self._log_debug(f"GPIO edge detect failed: {e} (collision ISR unavailable)", "WARNING")
+                    self.motor_isr_available = False
+                    self._log_debug(f"GPIO edge detect failed: {e} (will poll I2C instead)", "WARNING")
                 self.motor_control_enabled = True
                 self.motor_status_var.set("Ready")
                 self._log_debug("Motor control initialized", "SUCCESS")
@@ -124,9 +126,22 @@ class HardwareMixin:
         if not self.motor_control_enabled:
             time.sleep(0.1)
             return True
+        mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+        use_poll = not getattr(self, 'motor_isr_available', True)
         start = time.time()
         while not self.motor_movement_status and (time.time() - start) < timeout:
             if self.motor_collision_detected:
                 return False
+            if use_poll and self.motor_bus is not None:
+                try:
+                    st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    if st & 0x01:
+                        self.motor_collision_detected = True
+                        return False
+                    if st & 0x02:
+                        self.motor_movement_status = True
+                        return True
+                except Exception:
+                    pass
             time.sleep(0.05)
         return self.motor_movement_status
