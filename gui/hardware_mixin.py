@@ -122,31 +122,37 @@ class HardwareMixin:
         self.motor_movement_status = True
         self.motor_status_var.set("Ready (Sim)")
 
-    def _wait_for_motor_position(self, timeout: float = 5.0) -> bool:
+    def _wait_for_motor_position(self, timeout: float = 10.0) -> bool:
         if not self.motor_control_enabled:
             time.sleep(0.1)
             return True
         use_poll = not getattr(self, 'motor_isr_available', True)
         if use_poll and self.motor_bus is not None:
-            # GPIO ISR unavailable — poll MCU status register for change.
+            # GPIO ISR unavailable — two-phase I2C status polling.
+            # Phase 1: wait for status to change from baseline (motor starts).
+            # Phase 2: wait for status to return to baseline (motor done).
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
             try:
                 baseline = self.motor_bus.read_byte_data(mcu_address, 0x00)
             except Exception:
                 baseline = None
+            moved_away = False
             start = time.time()
             while (time.time() - start) < timeout:
                 if self.motor_collision_detected:
                     return False
                 try:
                     st = self.motor_bus.read_byte_data(mcu_address, 0x00)
-                    if baseline is not None and st != baseline:
-                        self.motor_movement_status = True
-                        return True
+                    if baseline is not None:
+                        if not moved_away and st != baseline:
+                            moved_away = True
+                        elif moved_away and st == baseline:
+                            self.motor_movement_status = True
+                            return True
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Timeout — assume motor reached position (matches pre-ISR behavior).
+            # Timeout — assume motor reached position.
             self.motor_movement_status = True
             return True
         # ISR-based path: wait for callback to set motor_movement_status.
