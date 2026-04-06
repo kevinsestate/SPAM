@@ -6,7 +6,7 @@ __pycache__/
 .Python
 venv/
 env/
-ENV/
+ENV/L
 *.db
 *.sqlite
 *.sqlite3
