@@ -132,6 +132,8 @@ class SPAMGui(
         self.adc_demo_sample_count = 0
         self.adc_demo_sample_rate_hz = 0.0
         self.adc_demo_t0 = None
+        self._adc_stream_running = False
+        self._adc_stream_thread = None
 
         self.extraction_f0_ghz = self._safe_float(
             self.connection_settings.get('extraction_f0_ghz', '24.0'), 24.0
@@ -166,6 +168,7 @@ class SPAMGui(
 
     def _on_close(self):
         self.is_measuring = False
+        self._stop_adc_stream_thread()
         if self.motor_gpio:
             try: self.motor_gpio.cleanup()
             except: pass

@@ -47,6 +47,40 @@ class MeasurementMixin:
         else:
             self.adc_demo_sample_rate_hz = 0.0
 
+    def _adc_stream_worker(self):
+        """Background thread: continuously read ADC and feed demo buffers."""
+        while self._adc_stream_running:
+            # Pause while sweep is active (sweep owns SPI).
+            if self.is_measuring:
+                time.sleep(0.1)
+                continue
+            if self.adc is None or self.adc.is_simulated:
+                time.sleep(0.1)
+                continue
+            try:
+                i_v, q_v = self.adc.read_iq_stream()
+                tx_mag = math.sqrt(i_v**2 + q_v**2)
+                self._record_adc_demo_sample(tx_mag, tx_mag)
+            except Exception:
+                time.sleep(0.05)
+
+    def _start_adc_stream_thread(self):
+        """Start the background ADC stream thread."""
+        if getattr(self, '_adc_stream_running', False):
+            return
+        self._adc_stream_running = True
+        self._adc_stream_thread = threading.Thread(
+            target=self._adc_stream_worker, daemon=True)
+        self._adc_stream_thread.start()
+
+    def _stop_adc_stream_thread(self):
+        """Stop the background ADC stream thread."""
+        self._adc_stream_running = False
+        t = getattr(self, '_adc_stream_thread', None)
+        if t is not None and t.is_alive():
+            t.join(timeout=1.0)
+        self._adc_stream_thread = None
+
     def _avg_stream_reads(self, n):
         """Take n stream reads and return averaged (i, q)."""
         i_sum = 0.0
@@ -195,10 +229,14 @@ class MeasurementMixin:
             self.after(0, lambda a=arm_angle: self._update_status(f"Stopped at {a:.1f}\u00b0", "info"))
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
+        # Resume background ADC stream if graph is enabled.
+        if getattr(self, 'adc_demo_graph_enabled', False):
+            self._start_adc_stream_thread()
 
     def _on_start_measurement(self):
         if self.is_measuring:
             return
+        self._stop_adc_stream_thread()
         self.is_measuring = True
         self._reset_adc_demo_series()
         self.current_angle = 0.0

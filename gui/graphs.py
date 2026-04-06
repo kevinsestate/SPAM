@@ -15,6 +15,12 @@ class GraphsMixin:
         self.adc_demo_graph_enabled = not self.adc_demo_graph_enabled
         state = "enabled" if self.adc_demo_graph_enabled else "disabled"
         self._log_debug(f"ADC voltage graph {state}", "INFO")
+        if self.adc_demo_graph_enabled:
+            self._reset_adc_demo_series()
+            if not self.is_measuring:
+                self._start_adc_stream_thread()
+        else:
+            self._stop_adc_stream_thread()
         self._update_graphs()
 
     def _adc_demo_volts_to_mv(self, v_list):
@@ -178,7 +184,8 @@ class GraphsMixin:
         n = len(measurements) if measurements else 0
         toggle_changed = getattr(self, '_last_adc_graph_enabled_state', None) != self.adc_demo_graph_enabled
         self._last_adc_graph_enabled_state = self.adc_demo_graph_enabled
-        if n == self._last_graph_count and n > 0 and not toggle_changed:
+        adc_stream_active = getattr(self, '_adc_stream_running', False)
+        if n == self._last_graph_count and n > 0 and not toggle_changed and not adc_stream_active:
             return
         self._last_graph_count = n
         t = self.theme
