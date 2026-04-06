@@ -50,15 +50,12 @@ class MeasurementMixin:
     def _adc_stream_worker(self):
         """Background thread: continuously read ADC and feed demo buffers."""
         while self._adc_stream_running:
-            # Pause while sweep is active (sweep owns SPI).
-            if self.is_measuring:
-                time.sleep(0.1)
-                continue
             if self.adc is None or self.adc.is_simulated:
                 time.sleep(0.1)
                 continue
             try:
-                i_v, q_v = self.adc.read_iq_stream()
+                with self._adc_lock:
+                    i_v, q_v = self.adc.read_iq_stream()
                 tx_mag = math.sqrt(i_v**2 + q_v**2)
                 self._record_adc_demo_sample(tx_mag, tx_mag)
             except Exception:
@@ -86,7 +83,8 @@ class MeasurementMixin:
         i_sum = 0.0
         q_sum = 0.0
         for _ in range(max(1, n)):
-            i_v, q_v = self.adc.read_iq_stream()
+            with self._adc_lock:
+                i_v, q_v = self.adc.read_iq_stream()
             i_sum += i_v
             q_sum += q_v
         return i_sum / max(1, n), q_sum / max(1, n)
@@ -229,14 +227,10 @@ class MeasurementMixin:
             self.after(0, lambda a=arm_angle: self._update_status(f"Stopped at {a:.1f}\u00b0", "info"))
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
-        # Resume background ADC stream if graph is enabled.
-        if getattr(self, 'adc_demo_graph_enabled', False):
-            self._start_adc_stream_thread()
 
     def _on_start_measurement(self):
         if self.is_measuring:
             return
-        self._stop_adc_stream_thread()
         self.is_measuring = True
         self._reset_adc_demo_series()
         self.current_angle = 0.0

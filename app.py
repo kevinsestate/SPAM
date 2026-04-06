@@ -134,6 +134,7 @@ class SPAMGui(
         self.adc_demo_t0 = None
         self._adc_stream_running = False
         self._adc_stream_thread = None
+        self._adc_lock = threading.Lock()
 
         self.extraction_f0_ghz = self._safe_float(
             self.connection_settings.get('extraction_f0_ghz', '24.0'), 24.0
