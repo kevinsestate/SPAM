@@ -42,7 +42,11 @@ class HardwareMixin:
                             self.after(0, lambda: self.motor_status_var.set("Ready"))
                     except Exception as e:
                         self.after(0, lambda: self._log_debug(f"Motor status error: {e}", "ERROR"))
-                GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
+                try:
+                    GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
+                    self._log_debug("GPIO edge detect on pin {isr_pin} OK", "SUCCESS")
+                except RuntimeError as e:
+                    self._log_debug(f"GPIO edge detect failed: {e} (collision ISR unavailable)", "WARNING")
                 self.motor_control_enabled = True
                 self.motor_status_var.set("Ready")
                 self._log_debug("Motor control initialized", "SUCCESS")
