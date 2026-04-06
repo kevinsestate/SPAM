@@ -13,7 +13,7 @@ class ConfigMixin:
     def _load_connection_settings(self):
         defaults = {
             'spi_bus': '0', 'spi_cs': '0', 'spi_speed': '1000000',
-            'adc_gain': '1', 'adc_data_rate': '96',
+            'adc_gain': '1', 'adc_data_rate': '96', 'adc_samples_per_point': '8',
             'enable_rf_switch': '0',
             'switch_gpio': '22',
             'microcontroller_address': '0x55', 'isr_pin': '17',

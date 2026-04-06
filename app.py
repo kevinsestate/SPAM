@@ -103,6 +103,7 @@ class SPAMGui(
         self.power_level = -10.0
         self.angle_step = 5.0
         self.measurement_interval = 0.5
+        self.adc_samples_per_point = int(self.connection_settings.get('adc_samples_per_point', '8'))
 
         self.calibration_error = 0.0
         self.noise_level = 0.0

@@ -28,7 +28,8 @@ class ConnectionDialogMixin:
         row = section_label("ADC (AD7193 / Pmod AD5)", row)
         for lbl, key in [("SPI Bus:", 'spi_bus'), ("SPI CS:", 'spi_cs'),
                          ("SPI Speed (Hz):", 'spi_speed'), ("ADC Gain:", 'adc_gain'),
-                         ("Data Rate (Hz):", 'adc_data_rate')]:
+                         ("Data Rate (Hz):", 'adc_data_rate'),
+                         ("Samples/Point:", 'adc_samples_per_point')]:
             v = tk.StringVar(value=self.connection_settings.get(key, ''))
             vars_[key] = v
             self._dialog_entry_row(content, lbl, v, row)

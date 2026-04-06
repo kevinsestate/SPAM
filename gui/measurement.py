@@ -47,8 +47,19 @@ class MeasurementMixin:
         else:
             self.adc_demo_sample_rate_hz = 0.0
 
+    def _avg_stream_reads(self, n):
+        """Take n stream reads and return averaged (i, q)."""
+        i_sum = 0.0
+        q_sum = 0.0
+        for _ in range(max(1, n)):
+            i_v, q_v = self.adc.read_iq_stream()
+            i_sum += i_v
+            q_sum += q_v
+        return i_sum / max(1, n), q_sum / max(1, n)
+
     def _take_adc_reading(self):
         """Take a single ADC reading and return (transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag)."""
+        n = getattr(self, 'adc_samples_per_point', 1)
         if self.adc is not None:
             # --- Real ADC reads ---
             if self.adc.is_simulated:
@@ -61,7 +72,7 @@ class MeasurementMixin:
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
                 else:
-                    i_tx, q_tx = self.adc.read_iq_stream()
+                    i_tx, q_tx = self._avg_stream_reads(n)
 
                 # S11 (reflection): switch to RXp, read I/Q
                 self.rf_switch.select_reflection()
@@ -69,11 +80,11 @@ class MeasurementMixin:
                 if self.adc.is_simulated:
                     i_rx, q_rx = self.adc.read_iq()
                 else:
-                    i_rx, q_rx = self.adc.read_iq_stream()
+                    i_rx, q_rx = self._avg_stream_reads(n)
             else:
-                # ADC-only mode: single I/Q read per point (no RF switch means
-                # both paths see the same physical channels; duplicating the
-                # pair for TX/RX keeps downstream math consistent).
+                # ADC-only mode: single averaged read per point (no RF switch
+                # means both paths see the same physical channels; duplicating
+                # the pair for TX/RX keeps downstream math consistent).
                 if not self._adc_only_hint_logged:
                     self._adc_only_hint_logged = True
                     self.after(0, lambda: self._log_debug(
@@ -83,7 +94,7 @@ class MeasurementMixin:
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
                 else:
-                    i_tx, q_tx = self.adc.read_iq_stream()
+                    i_tx, q_tx = self._avg_stream_reads(n)
                 i_rx, q_rx = i_tx, q_tx
 
             s21_mag = math.sqrt(i_tx**2 + q_tx**2)
@@ -148,7 +159,6 @@ class MeasurementMixin:
         self.current_angle = arm_angle
         reading = self._take_adc_reading()
         self._record_and_store(*reading)
-        time.sleep(self.measurement_interval)
 
         # --- Sweep: move then measure until arm reaches 80° ---
         while self.is_measuring and arm_angle < max_arm_angle:
@@ -174,7 +184,6 @@ class MeasurementMixin:
 
             if int(arm_angle) % 10 == 0:
                 self.after(0, lambda a=arm_angle: self._log_debug(f"Progress: {a:.1f}\u00b0 / {max_arm_angle:.0f}\u00b0", "INFO"))
-            time.sleep(self.measurement_interval)
 
         self.is_measuring = False
         if arm_angle >= max_arm_angle:
