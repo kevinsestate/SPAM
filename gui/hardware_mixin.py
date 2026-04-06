@@ -128,31 +128,21 @@ class HardwareMixin:
             return True
         use_poll = not getattr(self, 'motor_isr_available', True)
         if use_poll and self.motor_bus is not None:
-            # GPIO ISR unavailable — two-phase I2C status polling.
-            # Phase 1: wait for status to change from baseline (motor starts).
-            # Phase 2: wait for status to return to baseline (motor done).
+            # GPIO ISR unavailable — log MCU status during movement
+            # and wait a fixed duration for motor to physically arrive.
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
-            try:
-                baseline = self.motor_bus.read_byte_data(mcu_address, 0x00)
-            except Exception:
-                baseline = None
-            moved_away = False
+            statuses = []
             start = time.time()
-            while (time.time() - start) < timeout:
-                if self.motor_collision_detected:
-                    return False
+            while (time.time() - start) < 4.0:
                 try:
                     st = self.motor_bus.read_byte_data(mcu_address, 0x00)
-                    if baseline is not None:
-                        if not moved_away and st != baseline:
-                            moved_away = True
-                        elif moved_away and st == baseline:
-                            self.motor_movement_status = True
-                            return True
+                    statuses.append(st)
                 except Exception:
-                    pass
-                time.sleep(0.05)
-            # Timeout — assume motor reached position.
+                    statuses.append(-1)
+                time.sleep(0.2)
+            unique = sorted(set(statuses))
+            self.after(0, lambda u=unique: self._log_debug(
+                f"Motor poll trace: {[f'0x{v:02X}' if v >= 0 else 'ERR' for v in u]}", "INFO"))
             self.motor_movement_status = True
             return True
         # ISR-based path: wait for callback to set motor_movement_status.
