@@ -130,20 +130,26 @@ class HardwareMixin:
         if use_poll and self.motor_bus is not None:
             # GPIO ISR unavailable — poll MCU status for bit 0x02
             # (position reached) as defined in Arduino firmware.
+            # Phase 1: wait for bit 0x02 to CLEAR (MCU started moving).
+            # Phase 2: wait for bit 0x02 to SET   (motor arrived).
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
-            # Brief delay so MCU clears stale completion flag from
-            # previous move and starts processing the new command.
-            time.sleep(0.1)
             start = time.time()
+            # Phase 1: wait up to 2s for 0x02 to clear (motor starts).
+            while (time.time() - start) < 2.0:
+                try:
+                    st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    if not (st & 0x02):
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            # Phase 2: wait for 0x02 to come back (motor arrived).
             while (time.time() - start) < timeout:
                 try:
                     st = self.motor_bus.read_byte_data(mcu_address, 0x00)
                     if st & 0x02:
                         self.motor_movement_status = True
                         return True
-                    if (st & 0x01) and not (st & 0x02):
-                        self.motor_collision_detected = True
-                        return False
                 except Exception:
                     pass
                 time.sleep(0.05)
