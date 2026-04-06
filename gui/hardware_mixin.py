@@ -128,6 +128,7 @@ class HardwareMixin:
             return True
         mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
         use_poll = not getattr(self, 'motor_isr_available', True)
+        poll_logged = False
         start = time.time()
         while not self.motor_movement_status and (time.time() - start) < timeout:
             if self.motor_collision_detected:
@@ -135,12 +136,15 @@ class HardwareMixin:
             if use_poll and self.motor_bus is not None:
                 try:
                     st = self.motor_bus.read_byte_data(mcu_address, 0x00)
-                    if st & 0x01:
-                        self.motor_collision_detected = True
-                        return False
+                    if not poll_logged:
+                        poll_logged = True
+                        self.after(0, lambda s=st: self._log_debug(f"Motor poll status: 0x{s:02X}", "INFO"))
                     if st & 0x02:
                         self.motor_movement_status = True
                         return True
+                    if (st & 0x01) and not (st & 0x02):
+                        self.motor_collision_detected = True
+                        return False
                 except Exception:
                     pass
             time.sleep(0.05)
