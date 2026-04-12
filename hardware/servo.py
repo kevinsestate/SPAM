@@ -19,8 +19,8 @@ pigpio setup (recommended, eliminates jitter):
 import platform
 import time
 
-_PULSE_MIN_US = 1000    # pulse width at 0 degrees
-_PULSE_MAX_US = 2000    # pulse width at 180 degrees
+_PULSE_MIN_US = 900     # pulse width at 0 degrees (calibrated)
+_PULSE_MAX_US = 2200    # pulse width at 180 degrees (calibrated)
 _PWM_FREQ_HZ  = 50
 _PERIOD_US    = 20000   # 1 / 50 Hz = 20 ms
 
