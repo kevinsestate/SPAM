@@ -10,6 +10,8 @@
   "extraction_f0_ghz": "24.0",
   "extraction_d_mil": "60.0",
   "extraction_tensor_type": "isotropic",
+  "cal_d_m": "0.0",
+  "cal_d_sheet_m": "0.0",
   "theme": "dark",
   "i2c_bus": "1",
   "adc_address": "0x48",
@@ -19,5 +21,6 @@
   "serial_port": "COM1",
   "baud_rate": "9600",
   "timeout": "5.0",
-  "connection_type": "I2C"
+  "connection_type": "I2C",
+  "servo_gpio": "18"
 }

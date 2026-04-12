@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-04-02 (ADC throughput notes + Pi C++ benchmarks + docs layout cleanup)
+Last updated: 2026-04-12 (HPS-2518MG servo driver + dual-polarization sweep)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -128,11 +128,14 @@ Reference:
   - Mode writes must set internal clock bits (`CLK1=1`, `CLK0=0`) so conversions complete.
   - Differential channel select uses CH0/CH1 bit positions in config (`0x0100`, `0x0200`).
   - REFIN1 selection is used for the Pmod AD5 default reference path.
-- **Output data rate knob**: `configure(gain, data_rate)` in `hardware/ad7193.py` maps requested Hz → FS (`MCLK/1024/FS`). GUI: **Connection Setup → Data Rate (Hz)** / `spam_config.json` key `adc_data_rate`. CLI scripts: `--data-rate`. Higher values (e.g. `4800`) → faster ODR, more noise / less line-frequency rejection — step up gradually.
-- **Throughput observation**: At default `data_rate=96` and stream `read_iq_stream`, **Python and C++** (`ad7193_cpp_benchmark`) both report on the order of **~12 I/Q pairs/s** on Pi 4. C++ raw SPI (`spi_ad7193_benchmark`) can do **tens of kHz** of trivial transfers — so the **~12 Hz pair** limit is **ADC sequencer + filter + per-pair read logic**, not interpreter vs native code. Raising `data_rate` is the primary lever to increase pair rate; expect shared throughput across two sequenced channels.
+- **Current ADC config**: `adc_data_rate=4800`, `spi_speed=4000000`, `adc_samples_per_point=8`. Achieves ~300+ samp/s in background stream mode; ~8 samples averaged per sweep measurement point.
+- **Output data rate knob**: `configure(gain, data_rate)` in `hardware/ad7193.py` maps requested Hz → FS (`MCLK/1024/FS`). GUI: **Connection Setup → Data Rate (Hz)** / `spam_config.json` key `adc_data_rate`. Higher values → faster ODR, more noise / less line-frequency rejection.
+- **Background ADC stream**: enabled via View → Toggle ADC Voltage Graph. Runs a daemon thread calling `read_iq_stream()` continuously, protected by `_adc_lock`. Displays live voltage oscilloscope and real samp/s in the graph panel. Stream pauses only when graph is disabled or app closes.
+- **Motor control**: GPIO ISR edge detection fails on this Pi kernel (`Failed to add edge detection`). Fallback is two-phase I2C polling of MCU status register 0x00: wait for bit 0x02 to clear (motor started), then wait for it to set (motor arrived). Confirmed against Arduino firmware in `motor_control_status.py`. Collision detection (bit 0x01) disabled in polling path — appears during normal movement.
+- **Sweep throughput**: ~0.15-0.25 meas/s, bottlenecked by motor travel time (~2-4s per 5° step), not ADC speed.
 - **spidev ioctl**: `SPI_IOC_MESSAGE` success is **non-negative** return; treating `== 0` only as success breaks transfers on some Pi kernels (fixed in `ad7193_cpp_benchmark.cpp`).
 - GUI ADC-only measurement path is operational on Pi without motor/RF switch app control.
-- Extraction caveat: current extraction path can consume proxy S-parameters derived from ADC I/Q; calibrated voltage->S conversion is pending teammate implementation.
+- Extraction caveat: calibrated voltage→S-param conversion is implemented (`core/calibration.py`). Requires Through+Reflect calibration sweep before material measurements. Geometry constants `cal_d_m` and `cal_d_sheet_m` default to 0 — **must be measured and configured for the hardware rig** (Settings → Connection Setup).
 
 ## Who Owns What
 
@@ -141,8 +144,8 @@ Reference:
   - AD7193 driver + GUI acquisition path
   - Pi runbook execution and hardware sanity checks
 - Teammate (math owner):
-  - Calibrated voltage->S-parameter conversion
-  - Calibration model/fit integration into extraction pipeline
+  - Calibrated voltage->S-parameter conversion — **merged** (core/calibration.py)
+  - Calibration model/fit integration into extraction pipeline — **merged** (gui/callbacks.py, gui/measurement.py)
 
 ## Next Chat Bootstrap Checklist
 
@@ -197,6 +200,78 @@ python tests/test_optimizer.py
 ---
 
 ## Decision Log (Newest First)
+
+### 2026-04-12 - HPS-2518MG servo driver + dual-polarization sweep
+- Changed:
+  - **NEW** `hardware/servo.py`: `HPS2518Servo` class. GPIO BCM PWM (50 Hz, 1000–2000 µs), sim fallback on non-Linux. `move_to(angle, settle_s)`, `close()`, `_angle_to_duty()`.
+  - `hardware/__init__.py`: exports `HPS2518Servo`.
+  - `spam_config.json`: added `servo_gpio` key (default `"18"`).
+  - `app.py`: added `self.servo = None`, `self.servo_angle = 0.0`, `self.current_polarization = 0.0` init.
+  - `gui/hardware_mixin.py`: imports `HPS2518Servo`; servo init block in `_initialize_hardware()` reads `servo_gpio` from config; added `_send_servo_command(angle, settle_s)`.
+  - `gui/measurement.py`: split sweep into `_run_single_sweep(pol_angle)` helper + refactored `_measurement_worker` for dual-polarization: sweep at 0°, arm+material return home, servo rotates horn to 90° (1s settle), sweep at 90°, horn returns to 0°, extraction fires once.
+- Verified:
+  - Sim path: on Windows, servo logs `(sim) -> X°` and sweep runs without blocking.
+  - Stop during either sweep aborts cleanly; arm not forcibly returned.
+- Risks/follow-up:
+  - Servo `settle_s=1.0s` for 90° rotation is conservative — tune down if horn reaches position faster.
+  - PWM on GPIO 18 is software PWM (RPi.GPIO); jitter is acceptable for a hobby servo but pigpio would give hardware-accurate timing if needed.
+  - `servo_gpio` can be changed in Settings → Connection Setup if pin 18 conflicts.
+
+### 2026-04-07 - Voltage→S-parameter calibration (Through/Reflect)
+- Changed:
+  - **NEW** `core/calibration.py`: `compute_tau_m()`, `compute_gamma_m()`, `compute_k0()`, `lookup_cal_voltage()` — implements PDF inversion formulas from `26_03_31_Cal_Approx_SPAM.pdf`.
+  - **NEW** `backend/models.py`: `CalibrationSweep` model (angles_json, voltages_json, geometry_json, f0_ghz, sweep_type).
+  - `backend/database.py`: migration creates `calibration_sweeps` table on old DBs.
+  - `gui/callbacks.py`: `_on_calibrate()` replaced placeholder with real two-step Through+Reflect motor sweep. Each step runs in background thread, stores per-angle complex voltage in DB. `_load_latest_calibration()` restores cal from DB on startup.
+  - `gui/measurement.py`: added `_take_raw_voltage()` for cal sweeps; `_take_adc_reading()` now applies `compute_tau_m`/`compute_gamma_m` when calibration data exists, falls back to raw-proxy with warning when not.
+  - `app.py`: init `cal_through`, `cal_reflect`, `cal_d`, `cal_d_sheet` from config.
+  - `gui/config.py`: added `cal_d_m`, `cal_d_sheet_m` defaults.
+  - `gui/dialogs/connection_dlg.py`: added "Calibration Geometry" section with `d (m)` and `d_sheet (m)` fields.
+  - `spam_config.json`: added `cal_d_m`, `cal_d_sheet_m` keys (default 0.0).
+  - **NEW** `tests/test_calibration.py`: unit tests for calibration math.
+- Verified:
+  - Calibration math matches PDF boxed formulas (C3).
+  - Extraction pipeline unchanged — already consumes complex S₂₁/S₁₁ from stored power+phase.
+- Risks/follow-up:
+  - `cal_d_m` and `cal_d_sheet_m` default to 0 → phase correction is identity until real geometry is measured.
+  - Cal sweep only moves arm motor (motor 1); material motor not moved during cal — may need adjustment if fixture geometry requires it.
+
+### 2026-04-07 - Background ADC stream thread + SPI lock
+- Changed:
+  - `gui/measurement.py`: added `_adc_stream_worker()`, `_start_adc_stream_thread()`, `_stop_adc_stream_thread()`. Background thread reads ADC continuously at ~100-600 samp/s, feeding the live oscilloscope graph independently of the sweep.
+  - `gui/measurement.py`: `_avg_stream_reads()` now acquires `_adc_lock` per read so sweep and stream thread share SPI safely.
+  - `gui/graphs.py`: `_toggle_adc_demo_graph()` starts/stops stream thread; `_update_graphs()` bypasses measurement-count early-return when stream is active.
+  - `app.py`: added `_adc_lock = threading.Lock()`, `_adc_stream_running`, `_adc_stream_thread` init; added `import threading`; `_on_close()` stops stream thread before ADC shutdown.
+- Verified:
+  - Background stream shows ~300+ samp/s in graph when sweep is idle.
+  - Sweep continues to take per-angle averaged measurements correctly via lock.
+- Risks/follow-up:
+  - Lock contention could slightly reduce background stream rate during sweep's 8-sample averaged reads — acceptable tradeoff.
+
+### 2026-04-07 - Motor control: I2C bit 0x02 polling (replaces broken GPIO ISR)
+- Changed:
+  - `gui/hardware_mixin.py`: `_wait_for_motor_position()` replaced GPIO ISR path (broken on this Pi kernel) with two-phase I2C polling: phase 1 waits for MCU status bit 0x02 to clear (motor started), phase 2 waits for it to set (motor arrived). Timeout 10s as safety fallback. No collision detection in polling path (bit 0x01 appears during normal movement).
+  - `gui/hardware_mixin.py`: added `motor_isr_available` flag set during GPIO init to select poll vs ISR path.
+- Verified:
+  - Motors stop correctly at each 5° position during sweep.
+  - Sweep throughput ~0.15-0.25 meas/s (limited by motor travel ~2-4s per step).
+  - Poll trace during diagnostic phase: `['0x00', '0x02', '0x06', '0xDD']` — bit 0x02 confirms position reached per Arduino firmware (`motor_control_status.py`).
+- Risks/follow-up:
+  - Collision detection disabled in polling path; physical collision would cause 10s timeout then continue.
+  - GPIO ISR would restore collision detection if kernel support is added.
+
+### 2026-04-07 - ADC speed boost: 4800 Hz data rate, 4 MHz SPI, per-point averaging
+- Changed:
+  - `spam_config.json`: `spi_speed` 1000000 → 4000000; `adc_data_rate` 96 → 4800; added `adc_samples_per_point: 8`.
+  - `gui/config.py`: added `adc_samples_per_point: '8'` default.
+  - `app.py`: reads `adc_samples_per_point` from config.
+  - `gui/dialogs/connection_dlg.py`: added "Samples/Point" UI field.
+  - `gui/measurement.py`: `_take_adc_reading()` calls `_avg_stream_reads(n)` for real hardware (averages n I/Q reads per point); removed `time.sleep(measurement_interval)` calls from sweep loop.
+- Verified:
+  - ADC initializes at 4800 Hz, SPI 4 MHz on Pi (`AD7193 config: gain=1, FS=1, req_rate=4800Hz realized~4800.0Hz`).
+  - Background stream achieves ~300+ samp/s.
+- Risks/follow-up:
+  - Higher data rate = more noise / less line-frequency rejection. Validate SNR for real material campaigns.
 
 ### 2026-04-02 - Repository layout cleanup (docs consolidation)
 - Changed:
@@ -305,10 +380,10 @@ python tests/test_optimizer.py
 
 ## Open Issues / Next Priorities
 
-1. Run smoke test on all imports and test suite to verify refactor integrity.
-2. Merge teammate voltage->calibrated S-parameter math into GUI extraction path.
-3. If higher effective sample rate is required: validate raised `adc_data_rate` / `--data-rate` on hardware (noise, settling); optional sidecar high-rate capture vs GUI decimation.
-3. Validate extraction against calibrated real material reference sample(s).
-4. Perform full Raspberry Pi hardware-in-loop validation with motor/switch in final rig.
-5. Decide whether to keep/add physical constraints in symmetric extraction to reduce parameter ambiguity.
-6. Keep this file updated after each substantial task.
+1. **Measure and configure `cal_d_m` and `cal_d_sheet_m`** for the hardware rig — currently 0.0 (phase correction disabled). Set in Settings → Connection Setup.
+2. Run Through+Reflect calibration on the actual rig and validate S-param output against a known reference sample.
+3. Connect RF switch hardware and enable `enable_rf_switch=1` to get independent TX (S21) and RX (S11) measurements — currently both channels read identical ADC input in ADC-only mode.
+4. Validate ADC SNR at `data_rate=4800` against real material reference sample (higher rate = more noise).
+5. Restore collision detection: currently disabled in I2C polling path. Options: fix GPIO ISR on kernel, or identify a reliable collision-only MCU status value.
+6. Validate extraction against calibrated real material reference sample(s).
+7. Keep this file updated after each substantial task.

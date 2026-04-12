@@ -109,6 +109,18 @@ class SPAMGui(
         self.calibration_error = 0.0
         self.noise_level = 0.0
 
+        # Calibration state (Through + Reflect reference voltages)
+        self.cal_through = None   # {angle: complex} or None
+        self.cal_reflect = None   # {angle: complex} or None
+        self.cal_d = self._safe_float(
+            self.connection_settings.get('cal_d_m', '0.0'), 0.0
+        )
+        self.cal_d_sheet = self._safe_float(
+            self.connection_settings.get('cal_d_sheet_m', '0.0'), 0.0
+        )
+        self._cal_running = False
+        self._cal_missing_warned = False
+
         self.motor_control_enabled = False
         self.motor_bus = None
         self.motor_gpio = None
@@ -118,6 +130,10 @@ class SPAMGui(
         self.motor_command = 1
         self.motor_status_var = tk.StringVar(value="Not Initialized")
         self.motor_position_var = tk.StringVar(value="0.0\u00b0")
+
+        self.servo = None
+        self.servo_angle = 0.0
+        self.current_polarization = 0.0
 
         self.adc = None
         self.rf_switch = None

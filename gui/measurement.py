@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from backend import Measurement
+from core.calibration import compute_k0, compute_tau_m, compute_gamma_m, lookup_cal_voltage
 
 
 class MeasurementMixin:
@@ -89,6 +90,48 @@ class MeasurementMixin:
             q_sum += q_v
         return i_sum / max(1, n), q_sum / max(1, n)
 
+    def _take_raw_voltage(self):
+        """Read raw complex voltages from ADC (no S-param conversion).
+
+        Returns
+        -------
+        (complex, complex)
+            (V_tx, V_rx) where V = i + j*q.  Used by calibration sweeps.
+        """
+        n = getattr(self, 'adc_samples_per_point', 1)
+        if self.adc is not None:
+            if self.adc.is_simulated:
+                self.adc.set_sim_angle(self.current_angle)
+
+            if self.rf_switch is not None:
+                self.rf_switch.select_transmission()
+                time.sleep(0.01)
+                if self.adc.is_simulated:
+                    i_tx, q_tx = self.adc.read_iq()
+                else:
+                    i_tx, q_tx = self._avg_stream_reads(n)
+
+                self.rf_switch.select_reflection()
+                time.sleep(0.01)
+                if self.adc.is_simulated:
+                    i_rx, q_rx = self.adc.read_iq()
+                else:
+                    i_rx, q_rx = self._avg_stream_reads(n)
+            else:
+                if self.adc.is_simulated:
+                    i_tx, q_tx = self.adc.read_iq()
+                else:
+                    i_tx, q_tx = self._avg_stream_reads(n)
+                i_rx, q_rx = i_tx, q_tx
+
+            return complex(i_tx, q_tx), complex(i_rx, q_rx)
+        else:
+            # Simulation fallback: synthetic complex voltages
+            angle_rad = math.radians(self.current_angle)
+            v_tx = complex(0.5 * math.cos(angle_rad), 0.5 * math.sin(angle_rad))
+            v_rx = complex(0.3 * math.cos(angle_rad + 0.5), 0.3 * math.sin(angle_rad + 0.5))
+            return v_tx, v_rx
+
     def _take_adc_reading(self):
         """Take a single ADC reading and return (transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag)."""
         n = getattr(self, 'adc_samples_per_point', 1)
@@ -129,13 +172,40 @@ class MeasurementMixin:
                     i_tx, q_tx = self._avg_stream_reads(n)
                 i_rx, q_rx = i_tx, q_tx
 
-            s21_mag = math.sqrt(i_tx**2 + q_tx**2)
-            s21_phase = math.degrees(math.atan2(q_tx, i_tx))
+            # --- Apply calibration if available, else raw-proxy fallback ---
+            cal_t = getattr(self, 'cal_through', None)
+            cal_r = getattr(self, 'cal_reflect', None)
+            if cal_t and cal_r:
+                V_tx = complex(i_tx, q_tx)
+                V_rx = complex(i_rx, q_rx)
+                T_ref = lookup_cal_voltage(cal_t, self.current_angle)
+                G_ref = lookup_cal_voltage(cal_r, self.current_angle)
+                f_hz = self.extraction_f0_ghz * 1e9
+                k0 = compute_k0(f_hz)
+                d = getattr(self, 'cal_d', 0.0)
+                d_sheet = getattr(self, 'cal_d_sheet', 0.0)
+                theta = self.current_angle
+
+                s21_complex = compute_tau_m(V_tx, T_ref, k0, d, theta)
+                s11_complex = compute_gamma_m(V_rx, G_ref, k0, d, d_sheet, theta)
+
+                s21_mag = abs(s21_complex)
+                s21_phase = math.degrees(math.atan2(s21_complex.imag, s21_complex.real))
+                s11_mag = abs(s11_complex)
+                s11_phase = math.degrees(math.atan2(s11_complex.imag, s11_complex.real))
+            else:
+                if not getattr(self, '_cal_missing_warned', False):
+                    self._cal_missing_warned = True
+                    self.after(0, lambda: self._log_debug(
+                        "No calibration data: using raw voltage as S-param proxy. "
+                        "Run Calibrate to get calibrated results.", "WARNING"))
+                s21_mag = math.sqrt(i_tx**2 + q_tx**2)
+                s21_phase = math.degrees(math.atan2(q_tx, i_tx))
+                s11_mag = math.sqrt(i_rx**2 + q_rx**2)
+                s11_phase = math.degrees(math.atan2(q_rx, i_rx))
+
             transmitted_power = 20.0 * math.log10(s21_mag) if s21_mag > 0 else -100.0
             transmitted_phase = s21_phase
-
-            s11_mag = math.sqrt(i_rx**2 + q_rx**2)
-            s11_phase = math.degrees(math.atan2(q_rx, i_rx))
             reflected_power = 20.0 * math.log10(s11_mag) if s11_mag > 0 else -100.0
             reflected_phase = s11_phase
         else:
@@ -180,51 +250,122 @@ class MeasurementMixin:
                     self.after(0, lambda: self._log_debug(f"{label} timeout at {position:.2f}\u00b0", "WARNING"))
         return True
 
-    def _measurement_worker(self):
+    def _run_single_sweep(self, pol_angle: float) -> bool:
+        """Run one arm sweep (0-80 degrees) for a given horn polarization angle.
+
+        Parameters
+        ----------
+        pol_angle : float
+            Horn polarization angle in degrees (for log labelling only).
+
+        Returns
+        -------
+        bool
+            True if sweep completed to 80 degrees, False if stopped early.
+        """
         arm_step = 5.0
         material_step = 2.5
         max_arm_angle = 80.0
         arm_angle = 0.0
         material_angle = 0.0
+        label = f"Pol {pol_angle:.0f}\u00b0"
 
-        # --- Initial ADC measurement at home (0°) ---
         self.current_angle = arm_angle
+        self.current_polarization = pol_angle
         reading = self._take_adc_reading()
         self._record_and_store(*reading)
 
-        # --- Sweep: move then measure until arm reaches 80° ---
         while self.is_measuring and arm_angle < max_arm_angle:
             arm_angle += arm_step
             material_angle += material_step
             self.current_angle = arm_angle
 
-            # Move arm motor (motor 1)
             if not self._move_motor_and_wait(1, arm_angle, "Arm"):
                 if self.motor_collision_detected:
                     self.is_measuring = False
-                    break
+                    return False
 
-            # Move material motor (motor 2)
             if not self._move_motor_and_wait(2, material_angle, "Material"):
                 if self.motor_collision_detected:
                     self.is_measuring = False
-                    break
+                    return False
 
-            # ADC measurement after both motors reach position
             reading = self._take_adc_reading()
             self._record_and_store(*reading)
 
             if int(arm_angle) % 10 == 0:
-                self.after(0, lambda a=arm_angle: self._log_debug(f"Progress: {a:.1f}\u00b0 / {max_arm_angle:.0f}\u00b0", "INFO"))
+                self.after(0, lambda a=arm_angle, lbl=label: self._log_debug(
+                    f"[{lbl}] Progress: {a:.1f}\u00b0 / {max_arm_angle:.0f}\u00b0", "INFO"))
+
+        return arm_angle >= max_arm_angle
+
+    def _measurement_worker(self):
+        # --- Polarization 0: sweep at horn 0 degrees ---
+        self.after(0, lambda: self._log_debug("Sweep 1/2: horn at 0\u00b0", "INFO"))
+        self.after(0, lambda: self._update_status("Sweep 1/2: horn 0\u00b0", "info"))
+
+        completed = self._run_single_sweep(pol_angle=0.0)
+
+        if not self.is_measuring or not completed:
+            self.is_measuring = False
+            self.after(0, lambda: self._log_debug(
+                f"Stopped during sweep 1 at {self.current_angle:.1f}\u00b0", "INFO"))
+            self.after(0, lambda: self._update_status(
+                f"Stopped at {self.current_angle:.1f}\u00b0", "info"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            self.after(0, self._update_button_states)
+            return
+
+        self.after(0, lambda: self._log_debug("Sweep 1/2 complete — returning arm home", "SUCCESS"))
+
+        # --- Return arm home ---
+        if not self._move_motor_and_wait(1, 0.0, "Arm-home"):
+            self.is_measuring = False
+            self.after(0, lambda: self._log_debug("Arm return failed — aborting", "ERROR"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            self.after(0, self._update_button_states)
+            return
+        if not self._move_motor_and_wait(2, 0.0, "Material-home"):
+            self.is_measuring = False
+            self.after(0, lambda: self._log_debug("Material return failed — aborting", "ERROR"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            self.after(0, self._update_button_states)
+            return
+
+        # --- Rotate horn 180 degrees (physical 90 deg polarization rotation) ---
+        self.after(0, lambda: self._log_debug("Rotating horn to 180\u00b0...", "INFO"))
+        self.after(0, lambda: self._update_status("Rotating horn to 180\u00b0...", "info"))
+        self._send_servo_command(180.0, settle_s=2.0)
+
+        if not self.is_measuring:
+            self.after(0, lambda: self._log_debug("Stopped before sweep 2", "INFO"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            self.after(0, self._update_button_states)
+            return
+
+        # --- Polarization 1: sweep at horn 90 degrees ---
+        self.after(0, lambda: self._log_debug("Sweep 2/2: horn at 90\u00b0", "INFO"))
+        self.after(0, lambda: self._update_status("Sweep 2/2: horn 90\u00b0", "info"))
+
+        completed = self._run_single_sweep(pol_angle=90.0)
+
+        # --- Return horn to 0 degrees ---
+        self.after(0, lambda: self._log_debug("Returning horn to 0\u00b0", "INFO"))
+        self._send_servo_command(0.0, settle_s=2.0)
 
         self.is_measuring = False
-        if arm_angle >= max_arm_angle:
-            self.after(0, lambda: self._log_debug("Sweep complete (0-80\u00b0)", "SUCCESS"))
-            self.after(0, lambda: self._update_status("Sweep complete", "success"))
+
+        if completed:
+            self.after(0, lambda: self._log_debug(
+                "Dual-polarization sweep complete (0\u00b0 + 90\u00b0)", "SUCCESS"))
+            self.after(0, lambda: self._update_status("Dual sweep complete", "success"))
             self.after(100, self._run_extraction)
         else:
-            self.after(0, lambda a=arm_angle: self._log_debug(f"Stopped at {a:.1f}\u00b0", "INFO"))
-            self.after(0, lambda a=arm_angle: self._update_status(f"Stopped at {a:.1f}\u00b0", "info"))
+            self.after(0, lambda: self._log_debug(
+                f"Stopped during sweep 2 at {self.current_angle:.1f}\u00b0", "INFO"))
+            self.after(0, lambda: self._update_status(
+                f"Stopped at {self.current_angle:.1f}\u00b0", "info"))
+
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
 

@@ -15,6 +15,11 @@ class DBMixin:
             self._log_debug("Database connection established", "INFO")
         except Exception as e:
             self._log_debug(f"Database init error: {e}", "ERROR")
+        # Load latest calibration data from DB into memory
+        try:
+            self._load_latest_calibration()
+        except Exception as e:
+            self._log_debug(f"Cal load skipped: {e}", "WARNING")
         self._update_display()
 
     def _get_measurements(self, limit=1000):

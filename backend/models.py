@@ -38,6 +38,23 @@ class Calibration(Base):
         return f"<Calibration(id={self.id}, status={self.status}, timestamp={self.timestamp})>"
 
 
+class CalibrationSweep(Base):
+    """Stores per-angle reference voltages from a calibration sweep."""
+    __tablename__ = "calibration_sweeps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    sweep_type = Column(String, nullable=False)  # "through" or "reflect"
+    angles_json = Column(JSON, nullable=True)     # list of angle floats
+    voltages_json = Column(JSON, nullable=True)   # list of [i, q] pairs per angle
+    geometry_json = Column(JSON, nullable=True)    # {"d": ..., "d_sheet": ...} in metres
+    f0_ghz = Column(Float, nullable=True)
+
+    def __repr__(self):
+        n = len(self.angles_json) if self.angles_json else 0
+        return f"<CalibrationSweep(id={self.id}, type={self.sweep_type}, angles={n})>"
+
+
 class ExtractionResult(Base):
     """Stores results from T-matrix material extraction."""
     __tablename__ = "extraction_results"

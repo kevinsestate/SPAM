@@ -3,7 +3,7 @@
 import time
 import platform
 
-from hardware import AD7193, RFSwitch
+from hardware import AD7193, RFSwitch, HPS2518Servo
 
 
 class HardwareMixin:
@@ -89,6 +89,45 @@ class HardwareMixin:
             except Exception as e:
                 self._log_debug(f"RF switch init failed: {e}", "ERROR")
                 self.rf_switch = None
+
+        # --- HPS-2518MG Servo (GPIO PWM) ---
+        try:
+            servo_pin = int(self.connection_settings.get('servo_gpio', '18'))
+            self.servo = HPS2518Servo(gpio_pin=servo_pin, log_fn=self._log_debug)
+            mode_str = "SIM" if self.servo.is_simulated else "GPIO"
+            self._log_debug(f"Servo ready ({mode_str}) on GPIO{servo_pin}", "SUCCESS")
+        except Exception as e:
+            self._log_debug(f"Servo init failed: {e}", "ERROR")
+            self.servo = None
+
+    def _send_servo_command(self, angle: float, settle_s: float = 0.5) -> bool:
+        """Command the HPS-2518MG servo to *angle* degrees (0-180).
+
+        Parameters
+        ----------
+        angle : float
+            Target angle in degrees.
+        settle_s : float
+            Seconds to wait for servo to reach position.
+
+        Returns
+        -------
+        bool
+            True on success (including simulation).
+        """
+        if self.servo is None:
+            self._log_debug(f"Servo (sim): -> {angle:.1f}°", "INFO")
+            self.servo_angle = angle
+            self.current_polarization = angle
+            return True
+        try:
+            self.servo.move_to(angle, settle_s=settle_s)
+            self.servo_angle = angle
+            self.current_polarization = angle
+            return True
+        except Exception as e:
+            self._log_debug(f"Servo cmd error: {e}", "ERROR")
+            return False
 
     def _send_motor_command(self, motor_num: int, position: float, command: int = 1) -> bool:
         if not self.motor_control_enabled or self.motor_bus is None:

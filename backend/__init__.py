@@ -4,9 +4,9 @@ Contains database configuration and models.
 """
 
 from .database import SessionLocal, engine, Base, migrate_db, SQLALCHEMY_DATABASE_URL
-from .models import Measurement, Calibration, ExtractionResult
+from .models import Measurement, Calibration, CalibrationSweep, ExtractionResult
 
 __all__ = [
     "SessionLocal", "engine", "Base", "migrate_db", "SQLALCHEMY_DATABASE_URL",
-    "Measurement", "Calibration", "ExtractionResult",
+    "Measurement", "Calibration", "CalibrationSweep", "ExtractionResult",
 ]

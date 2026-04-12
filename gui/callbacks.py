@@ -3,9 +3,12 @@
 import os
 import json
 import csv
+import threading
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, filedialog
+
+from backend import CalibrationSweep
 
 
 class CallbacksMixin:
@@ -20,33 +23,153 @@ class CallbacksMixin:
         self._status_dot.config(fg=cmap.get(status_type, self._t('success')))
 
     def _on_calibrate(self):
-        r = messagebox.askokcancel("Calibration - Step 1",
-            "Ensure NO material is in the fixture.\nClick OK to begin empty calibration.")
+        if self.is_measuring:
+            messagebox.showwarning("Busy", "Stop the current measurement before calibrating.")
+            return
+        if getattr(self, '_cal_running', False):
+            messagebox.showwarning("Busy", "Calibration is already running.")
+            return
+        r = messagebox.askokcancel("Calibration - Step 1 (Through)",
+            "Remove ALL material from the fixture.\n"
+            "This will sweep 0\u00b0\u201380\u00b0 and record through-reference voltages.\n\n"
+            "Click OK to begin.")
         if not r:
             return
+        self._cal_running = True
         self.status_var.set("Calibrating...")
-        self._update_status("Empty calibration...", "warning")
-        self._log_debug("Calibration Step 1 started", "INFO")
-        def step1_complete():
-            self._log_debug("Step 1 complete", "SUCCESS")
-            r2 = messagebox.askokcancel("Calibration - Step 2",
-                "Place material sample and click OK.")
-            if not r2:
-                self.status_var.set("Ready")
+        self._update_status("Through calibration sweep...", "warning")
+        self._log_debug("Calibration: Through sweep started", "INFO")
+        threading.Thread(target=self._cal_through_worker, daemon=True).start()
+
+    def _cal_sweep_angles(self):
+        """Return the list of calibration sweep angles (matches measurement sweep)."""
+        step = 5.0
+        angles = []
+        a = 0.0
+        while a <= 80.0:
+            angles.append(a)
+            a += step
+        return angles
+
+    def _cal_through_worker(self):
+        """Background: sweep Through calibration (no material)."""
+        angles = self._cal_sweep_angles()
+        voltages = []
+        for angle in angles:
+            if not getattr(self, '_cal_running', False):
+                self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
+                self.after(0, lambda: self.status_var.set("Ready"))
                 return
-            self._update_status("Material calibration...", "warning")
-            def step2_complete():
-                cal = self._create_calibration({"step1": "empty", "step2": "material",
-                    "ts1": datetime.now().isoformat(), "ts2": datetime.now().isoformat()})
-                if cal:
-                    self._log_debug("Calibration complete", "SUCCESS")
-                    self._update_status("Calibration complete", "success")
-                    self.status_var.set("Ready")
-                    messagebox.showinfo("Done", "Calibration complete.")
-                else:
-                    self._update_status("Calibration failed", "error")
-            self.after(2000, step2_complete)
-        self.after(2000, step1_complete)
+            self.current_angle = angle
+            if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
+                self.after(0, lambda: self._log_debug("Cal through: motor fail", "ERROR"))
+                self._cal_running = False
+                self.after(0, lambda: self.status_var.set("Ready"))
+                return
+            v_tx, v_rx = self._take_raw_voltage()
+            voltages.append([v_tx.real, v_tx.imag])
+            self.after(0, lambda a=angle, v=v_tx: self._log_debug(
+                f"  Through {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        # Store through reference
+        self.cal_through = {a: complex(v[0], v[1]) for a, v in zip(angles, voltages)}
+        self._save_cal_sweep("through", angles, voltages)
+        self.after(0, lambda: self._log_debug(
+            f"Through cal done: {len(angles)} angles", "SUCCESS"))
+
+        # Prompt for reflect step (must happen on main thread)
+        self.after(0, self._cal_prompt_reflect)
+
+    def _cal_prompt_reflect(self):
+        """Main-thread: prompt user then launch reflect sweep."""
+        r = messagebox.askokcancel("Calibration - Step 2 (Reflect)",
+            "Place a METAL SHEET in the fixture.\n"
+            "This will sweep 0\u00b0\u201380\u00b0 and record reflect-reference voltages.\n\n"
+            "Click OK to begin.")
+        if not r:
+            self._cal_running = False
+            self.status_var.set("Ready")
+            self._log_debug("Calibration cancelled after through step", "WARNING")
+            return
+        self._update_status("Reflect calibration sweep...", "warning")
+        self._log_debug("Calibration: Reflect sweep started", "INFO")
+        threading.Thread(target=self._cal_reflect_worker, daemon=True).start()
+
+    def _cal_reflect_worker(self):
+        """Background: sweep Reflect calibration (metal sheet)."""
+        angles = self._cal_sweep_angles()
+        voltages = []
+        for angle in angles:
+            if not getattr(self, '_cal_running', False):
+                self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
+                self.after(0, lambda: self.status_var.set("Ready"))
+                return
+            self.current_angle = angle
+            if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
+                self.after(0, lambda: self._log_debug("Cal reflect: motor fail", "ERROR"))
+                self._cal_running = False
+                self.after(0, lambda: self.status_var.set("Ready"))
+                return
+            v_tx, v_rx = self._take_raw_voltage()
+            voltages.append([v_rx.real, v_rx.imag])
+            self.after(0, lambda a=angle, v=v_rx: self._log_debug(
+                f"  Reflect {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        # Store reflect reference
+        self.cal_reflect = {a: complex(v[0], v[1]) for a, v in zip(angles, voltages)}
+        self._save_cal_sweep("reflect", angles, voltages)
+
+        self._cal_running = False
+        self.after(0, lambda: self._log_debug(
+            f"Reflect cal done: {len(angles)} angles", "SUCCESS"))
+        self.after(0, lambda: self._update_status("Calibration complete", "success"))
+        self.after(0, lambda: self.status_var.set("Ready"))
+        self.after(0, lambda: messagebox.showinfo("Calibration Complete",
+            f"Through + Reflect calibration stored.\n{len(angles)} angles each.\n\n"
+            "NOTE: Geometry d and d_sheet are currently set to "
+            f"{self.cal_d:.4f} m and {self.cal_d_sheet:.4f} m.\n"
+            "Update in Settings \u2192 Connection Setup if needed."))
+
+    def _save_cal_sweep(self, sweep_type, angles, voltages):
+        """Persist a calibration sweep to the database."""
+        try:
+            rec = CalibrationSweep(
+                sweep_type=sweep_type,
+                angles_json=angles,
+                voltages_json=voltages,
+                geometry_json={"d": self.cal_d, "d_sheet": self.cal_d_sheet},
+                f0_ghz=self.extraction_f0_ghz,
+            )
+            self.db.add(rec)
+            self.db.commit()
+            self._log_debug(f"Cal sweep '{sweep_type}' saved to DB", "INFO")
+        except Exception as e:
+            self.db.rollback()
+            self._log_debug(f"Cal sweep save failed: {e}", "ERROR")
+
+    def _load_latest_calibration(self):
+        """Load the most recent through + reflect sweeps from DB into memory."""
+        try:
+            through = (self.db.query(CalibrationSweep)
+                       .filter(CalibrationSweep.sweep_type == "through")
+                       .order_by(CalibrationSweep.timestamp.desc()).first())
+            reflect = (self.db.query(CalibrationSweep)
+                       .filter(CalibrationSweep.sweep_type == "reflect")
+                       .order_by(CalibrationSweep.timestamp.desc()).first())
+            if through and through.angles_json and through.voltages_json:
+                self.cal_through = {
+                    a: complex(v[0], v[1])
+                    for a, v in zip(through.angles_json, through.voltages_json)
+                }
+                self._log_debug(f"Loaded through cal ({len(self.cal_through)} angles)", "INFO")
+            if reflect and reflect.angles_json and reflect.voltages_json:
+                self.cal_reflect = {
+                    a: complex(v[0], v[1])
+                    for a, v in zip(reflect.angles_json, reflect.voltages_json)
+                }
+                self._log_debug(f"Loaded reflect cal ({len(self.cal_reflect)} angles)", "INFO")
+        except Exception as e:
+            self._log_debug(f"Cal load from DB failed: {e}", "WARNING")
 
     def _update_button_states(self):
         if hasattr(self, 'start_container') and hasattr(self, 'stop_container') and hasattr(self, 'clear_container'):

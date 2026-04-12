@@ -10,7 +10,7 @@ class ConnectionDialogMixin:
     """Provides _on_connection_setup dialog."""
 
     def _on_connection_setup(self):
-        d = self._themed_dialog("Connection Setup", 500, 560)
+        d = self._themed_dialog("Connection Setup", 500, 640)
         tk.Label(d, text="Connection Configuration", bg=self._t('bg'),
                  fg=self._t('text'), font=(_FONT, 12, "bold")).pack(pady=(16, 12))
         content = tk.Frame(d, bg=self._t('bg_panel'), padx=16, pady=12)
@@ -43,6 +43,14 @@ class ConnectionDialogMixin:
             self._dialog_entry_row(content, lbl, v, row)
             row += 1
 
+        row = section_label("Calibration Geometry", row)
+        for lbl, key in [("Coupler Separation d (m):", 'cal_d_m'),
+                         ("Ref Plane to Sheet d_sheet (m):", 'cal_d_sheet_m')]:
+            v = tk.StringVar(value=self.connection_settings.get(key, ''))
+            vars_[key] = v
+            self._dialog_entry_row(content, lbl, v, row)
+            row += 1
+
         row = section_label("Motor Controller", row)
         for lbl, key in [("MCU Address:", 'microcontroller_address'),
                          ("ISR Pin:", 'isr_pin')]:
@@ -55,6 +63,10 @@ class ConnectionDialogMixin:
             for key, v in vars_.items():
                 self.connection_settings[key] = v.get().strip()
             self._save_connection_settings()
+            # Update calibration geometry in memory
+            self.cal_d = self._safe_float(self.connection_settings.get('cal_d_m', '0.0'), 0.0)
+            self.cal_d_sheet = self._safe_float(self.connection_settings.get('cal_d_sheet_m', '0.0'), 0.0)
+            self._log_debug(f"Cal geometry: d={self.cal_d:.6f}m, d_sheet={self.cal_d_sheet:.6f}m", "INFO")
             self._log_debug("Connection settings saved", "SUCCESS")
             self._update_status("Connection saved", "success")
             # Tear down existing hardware and re-initialize

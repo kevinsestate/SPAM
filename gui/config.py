@@ -19,6 +19,7 @@ class ConfigMixin:
             'microcontroller_address': '0x55', 'isr_pin': '17',
             'extraction_f0_ghz': '24.0', 'extraction_d_mil': '60.0',
             'extraction_tensor_type': 'diagonal',
+            'cal_d_m': '0.0', 'cal_d_sheet_m': '0.0',
             'theme': 'dark',
         }
         if os.path.exists(self.config_file):

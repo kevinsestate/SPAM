@@ -44,6 +44,22 @@ def migrate_db():
         for col_name, col_type in migrations:
             if col_name not in existing:
                 conn.execute(f"ALTER TABLE measurements ADD COLUMN {col_name} {col_type}")
+        # Ensure calibration_sweeps table exists (created by ORM on fresh DBs;
+        # this handles the case where the DB was created before this model was added).
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "calibration_sweeps" not in tables:
+            conn.execute("""
+                CREATE TABLE calibration_sweeps (
+                    id INTEGER PRIMARY KEY,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    sweep_type TEXT NOT NULL,
+                    angles_json TEXT,
+                    voltages_json TEXT,
+                    geometry_json TEXT,
+                    f0_ghz REAL
+                )
+            """)
         conn.commit()
     finally:
         conn.close()
