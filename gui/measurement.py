@@ -49,7 +49,7 @@ class MeasurementMixin:
             self.adc_demo_sample_rate_hz = 0.0
 
     def _adc_stream_worker(self):
-        """Background thread: continuously read ADC and feed demo buffers."""
+        """Background thread: continuously read ADC at ~20 Hz and feed demo buffers."""
         while self._adc_stream_running:
             if self.adc is None or self.adc.is_simulated:
                 time.sleep(0.1)
@@ -59,6 +59,7 @@ class MeasurementMixin:
                     i_v, q_v = self.adc.read_iq_stream()
                 tx_mag = math.sqrt(i_v**2 + q_v**2)
                 self._record_adc_demo_sample(tx_mag, tx_mag)
+                time.sleep(0.05)
             except Exception:
                 time.sleep(0.05)
 

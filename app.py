@@ -141,7 +141,7 @@ class SPAMGui(
         self._adc_only_hint_logged = False
 
         self._last_graph_count = -1
-        self.adc_demo_window_sec = 45.0
+        self.adc_demo_window_sec = 20.0
         self.adc_demo_graph_enabled = True
         self._sweep_pts_pol0 = 0
         self._sweep_pts_pol90 = 0

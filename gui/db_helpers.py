@@ -29,6 +29,21 @@ class DBMixin:
             print(f"Error retrieving measurements: {e}")
             return []
 
+    def _get_measurements_for_graph(self):
+        """Fetch only the most recent measurements needed for graphing (capped at 100).
+        A full dual-polarization sweep produces 34 points; 100 gives two full runs of headroom.
+        Use this instead of _get_measurements() inside graph update paths to avoid fetching
+        large result sets on every 500 ms redraw tick."""
+        try:
+            rows = (self.db.query(Measurement)
+                    .order_by(Measurement.timestamp.desc())
+                    .limit(100)
+                    .all())
+            return list(reversed(rows))
+        except Exception as e:
+            print(f"Error retrieving measurements for graph: {e}")
+            return []
+
     def _create_measurement(self, angle, permittivity, permeability,
                             transmitted_power=None, reflected_power=None,
                             transmitted_phase=None, reflected_phase=None,

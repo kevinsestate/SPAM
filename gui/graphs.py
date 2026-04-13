@@ -102,7 +102,7 @@ class GraphsMixin:
         tc = t['text']
         sc = t['text_sec']
         gc = t['grid']
-        dpi = 100
+        dpi = 72
 
         def make_graph(parent, row, col, title_text, ylabel_text, xlabel_text="Angle (\u00b0)"):
             frame = tk.Frame(parent, bg=fc, highlightbackground=t['border'],
@@ -157,8 +157,6 @@ class GraphsMixin:
                 self.after_cancel(self.resize_timer)
             def do_resize():
                 try:
-                    for f in [self.fig1, self.fig2, self.fig3, self.fig4]:
-                        f.tight_layout(pad=1.5)
                     for c in [self.canvas1, self.canvas2, self.canvas3, self.canvas4]:
                         c.draw_idle()
                 except:
@@ -180,12 +178,14 @@ class GraphsMixin:
             ax.spines[sp].set_color(t['border'])
 
     def _update_graphs(self):
-        measurements = self._get_measurements()
+        measurements = self._get_measurements_for_graph()
         n = len(measurements) if measurements else 0
         toggle_changed = getattr(self, '_last_adc_graph_enabled_state', None) != self.adc_demo_graph_enabled
         self._last_adc_graph_enabled_state = self.adc_demo_graph_enabled
-        adc_stream_active = getattr(self, '_adc_stream_running', False)
-        if n == self._last_graph_count and n > 0 and not toggle_changed and not adc_stream_active and not self.is_measuring:
+        adc_sample_changed = self.adc_demo_sample_count != getattr(self, '_last_adc_sample_count', -1)
+        self._last_adc_sample_count = self.adc_demo_sample_count
+        data_changed = n != self._last_graph_count
+        if not data_changed and not toggle_changed and not adc_sample_changed:
             return
         self._last_graph_count = n
         t = self.theme
@@ -285,7 +285,7 @@ class GraphsMixin:
                     self.ax3.set_ylim(min(all_p)-5, max(all_p)+5)
             self._style_ax(self.ax3, "TX / RX Power vs Angle", "Power (dBm)")
 
-        # --- Graph 4: ADC live voltage (always shown during sweep, placeholder when idle) ---
+        # --- Graph 4: ADC live voltage — only redraw when ADC data changed ---
         if self.is_measuring or self.adc_demo_graph_enabled:
             self.ax4.clear()
             tt = self.adc_demo_t if self.adc_demo_t else []
@@ -318,16 +318,14 @@ class GraphsMixin:
         else:
             self._render_adc_placeholder()
 
-        for f in [self.fig1, self.fig2, self.fig3, self.fig4]:
-            f.tight_layout(pad=1.5)
         for c in [self.canvas1, self.canvas2, self.canvas3, self.canvas4]:
             c.draw_idle()
 
     def _update_display(self):
         self._update_graphs()
-        measurements = self._get_measurements(limit=1)
+        measurements = self._get_measurements_for_graph()
         if measurements:
-            latest = measurements[0]
+            latest = measurements[-1]
             self.angle_var.set(f"{latest.angle:.1f}\u00b0")
             self.current_angle = latest.angle
         else:
