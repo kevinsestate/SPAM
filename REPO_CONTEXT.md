@@ -1,6 +1,6 @@
 # REPO_CONTEXT
 
-Last updated: 2026-04-12 (HPS-2518MG servo driver + dual-polarization sweep)
+Last updated: 2026-04-13 (expo polish, servo calibration, GUI fixes)
 Purpose: fast handoff context for new agents and maintainers.
 
 ## Agent Update Protocol (Required)
@@ -67,10 +67,11 @@ Active runtime path:
   - Root-level `spam_calc.py` and `spam_optimizer.py` are backward-compat shims.
 - `backend/database.py`, `backend/models.py`
   - SQLite models; uses relative imports; `backend/__init__.py` re-exports public API.
-- `hardware/ad7193.py`, `hardware/rf_switch.py`
-  - ADC (SPI) and switch control with simulation fallback.
+- `hardware/ad7193.py`, `hardware/rf_switch.py`, `hardware/servo.py`
+  - ADC (SPI), switch control, and HPS-2518MG servo — all with simulation fallback.
 - `scripts/pi/`
   - Pi-only ADC/SPI helpers: `check_adc_lowlevel.py`, `live_adc_view.py`, `adc_fast_capture.py`
+  - Servo calibration: `servo_test.py` — interactive pulse-width finder (scan/sweep/setmin/setmax)
   - C++ (build on Pi): `spi_ad7193_benchmark.cpp` (raw SPI rate), `ad7193_cpp_benchmark.cpp` (full AD7193 protocol + pair/s benchmark)
 
 ### Data flow
@@ -201,21 +202,44 @@ python tests/test_optimizer.py
 
 ## Decision Log (Newest First)
 
+### 2026-04-13 - Expo fixes: export, cal guard, motor reset, servo GPIO UI, cal status, log file
+- Changed:
+  - `gui/callbacks.py`: export now includes all S-param fields (tx/rx power+phase, polarization) in chronological order; JSON export appends latest extraction result block; help text updated to "Version 2.0 — Expo Build"; `_log_debug` appends to `~/SPAM/spam_run.log` (append mode, survives crashes); `_update_status` tracks `_last_status_type`.
+  - `gui/measurement.py`: extraction only auto-fires after sweep if `cal_through` is populated — otherwise logs warning and sets `extraction_status_var = "No Cal Data"`; all exit paths (success, stop, early abort) now reset `motor_position_var` → `0.0°` and `motor_status_var` → `Ready`.
+  - `gui/dialogs/connection_dlg.py`: added `Servo GPIO Pin (BCM)` field to Motor Controller section.
+  - `gui/config.py`: added `servo_gpio: '18'` default.
+  - `gui/panels/detail_panel.py`: added `cal_status_var` StringVar and `Cal Data` row in Measurement section.
+  - `gui/graphs.py`: `_update_display` updates `cal_status_var` (✓ HH loaded / ⚠ Through only / ✗ None); resets status dot to green when idle and no recent error/warning.
+- Verified:
+  - All changes committed and pushed (commit `bd76a72`).
+- Risks/follow-up:
+  - Cal status only shows HH (pol-0) loaded; dual-pol calibration not yet implemented.
+  - Log file grows unboundedly on very long sessions; no rotation implemented yet.
+
+### 2026-04-13 - Servo calibration and jitter fix
+- Changed:
+  - `hardware/servo.py`: calibrated pulse widths to **850µs = 0° (horizontal)**, **1800µs = 90° (vertical)**; angle math changed from 0–180° to 0–90° range (`angle / 90.0` factor); init no longer sends pulse on startup (sends 0 = PWM disabled); `move_to()` releases PWM signal (sends 0) after settle delay so servo holds mechanically without hunting.
+  - `gui/measurement.py`: second sweep command changed from `_send_servo_command(180.0)` to `_send_servo_command(90.0)` (was silently clamped before).
+  - `scripts/pi/servo_test.py`: **NEW** interactive calibration tool — `scan`, `sweep`, `min<us>`, `max<us>`, `p<us>`, angle commands, prints final MIN/MAX on quit.
+- Verified:
+  - Physical calibration: 850µs ≈ horizontal, 1800µs ≈ vertical (confirmed on Pi with pigpio).
+  - Jitter eliminated: servo no longer hunts on GUI startup.
+- Risks/follow-up:
+  - settle_s=2.0s in measurement worker is conservative; tune once mechanical stop time is measured.
+
 ### 2026-04-12 - HPS-2518MG servo driver + dual-polarization sweep
 - Changed:
-  - **NEW** `hardware/servo.py`: `HPS2518Servo` class. GPIO BCM PWM (50 Hz, 1000–2000 µs), sim fallback on non-Linux. `move_to(angle, settle_s)`, `close()`, `_angle_to_duty()`.
+  - **NEW** `hardware/servo.py`: `HPS2518Servo` class. GPIO BCM PWM (50 Hz), sim fallback on non-Linux. `move_to(angle, settle_s)`, `close()`, `_angle_to_duty()`.
   - `hardware/__init__.py`: exports `HPS2518Servo`.
   - `spam_config.json`: added `servo_gpio` key (default `"18"`).
   - `app.py`: added `self.servo = None`, `self.servo_angle = 0.0`, `self.current_polarization = 0.0` init.
   - `gui/hardware_mixin.py`: imports `HPS2518Servo`; servo init block in `_initialize_hardware()` reads `servo_gpio` from config; added `_send_servo_command(angle, settle_s)`.
-  - `gui/measurement.py`: split sweep into `_run_single_sweep(pol_angle)` helper + refactored `_measurement_worker` for dual-polarization: sweep at 0°, arm+material return home, servo rotates horn to 90° (1s settle), sweep at 90°, horn returns to 0°, extraction fires once.
+  - `gui/measurement.py`: split sweep into `_run_single_sweep(pol_angle)` helper + refactored `_measurement_worker` for dual-polarization: sweep at 0°, arm+material return home, servo rotates horn to 90° (2s settle), sweep at 90°, horn returns to 0°, extraction fires once.
 - Verified:
   - Sim path: on Windows, servo logs `(sim) -> X°` and sweep runs without blocking.
   - Stop during either sweep aborts cleanly; arm not forcibly returned.
 - Risks/follow-up:
-  - Servo `settle_s=1.0s` for 90° rotation is conservative — tune down if horn reaches position faster.
-  - PWM on GPIO 18 is software PWM (RPi.GPIO); jitter is acceptable for a hobby servo but pigpio would give hardware-accurate timing if needed.
-  - `servo_gpio` can be changed in Settings → Connection Setup if pin 18 conflicts.
+  - PWM on GPIO 18 via pigpio (hardware PWM) preferred over RPi.GPIO software PWM for accuracy.
 
 ### 2026-04-07 - Voltage→S-parameter calibration (Through/Reflect)
 - Changed:
@@ -382,8 +406,10 @@ python tests/test_optimizer.py
 
 1. **Measure and configure `cal_d_m` and `cal_d_sheet_m`** for the hardware rig — currently 0.0 (phase correction disabled). Set in Settings → Connection Setup.
 2. Run Through+Reflect calibration on the actual rig and validate S-param output against a known reference sample.
-3. Connect RF switch hardware and enable `enable_rf_switch=1` to get independent TX (S21) and RX (S11) measurements — currently both channels read identical ADC input in ADC-only mode.
-4. Validate ADC SNR at `data_rate=4800` against real material reference sample (higher rate = more noise).
-5. Restore collision detection: currently disabled in I2C polling path. Options: fix GPIO ISR on kernel, or identify a reliable collision-only MCU status value.
-6. Validate extraction against calibrated real material reference sample(s).
-7. Keep this file updated after each substantial task.
+3. **Dual-pol calibration**: cal sweep currently only captures pol-0 (horn at 0°). For full accuracy, a second through+reflect pass at 90° is needed and `_take_adc_reading` should use the matching reference. Deferred — not blocking expo.
+4. Connect RF switch hardware and enable `enable_rf_switch=1` to get independent TX (S21) and RX (S11) measurements — currently both channels read identical ADC input in ADC-only mode.
+5. Validate ADC SNR at `data_rate=4800` against real material reference sample (higher rate = more noise).
+6. Restore collision detection: currently disabled in I2C polling path. Options: fix GPIO ISR on kernel, or identify a reliable collision-only MCU status value.
+7. Validate extraction against calibrated real material reference sample(s).
+8. Tune servo `settle_s` (currently 2.0s) once actual travel time from 0°→90° is timed.
+9. Add log rotation to `spam_run.log` (currently unbounded append).
