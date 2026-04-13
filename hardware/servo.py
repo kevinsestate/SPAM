@@ -19,8 +19,8 @@ pigpio setup (recommended, eliminates jitter):
 import platform
 import time
 
-_PULSE_MIN_US = 900     # pulse width at 0 degrees (calibrated)
-_PULSE_MAX_US = 2200    # pulse width at 180 degrees (calibrated)
+_PULSE_MIN_US = 850     # pulse width at 0 degrees — horizontal polarization (calibrated)
+_PULSE_MAX_US = 1800    # pulse width at 90 degrees — vertical polarization (calibrated)
 _PWM_FREQ_HZ  = 50
 _PERIOD_US    = 20000   # 1 / 50 Hz = 20 ms
 
@@ -107,14 +107,14 @@ class HPS2518Servo:
         settle_s : float
             Seconds to wait after commanding the servo to let it reach position.
         """
-        angle = max(0.0, min(180.0, angle))
+        angle = max(0.0, min(90.0, angle))
 
         if self._sim:
             self._log(f"HPS2518Servo: (sim) -> {angle:.1f}°", "INFO")
             self._angle = angle
             return
 
-        pulse_us = int(_PULSE_MIN_US + (angle / 180.0) * (_PULSE_MAX_US - _PULSE_MIN_US))
+        pulse_us = int(_PULSE_MIN_US + (angle / 90.0) * (_PULSE_MAX_US - _PULSE_MIN_US))
 
         if self._pi is not None:
             self._pi.set_servo_pulsewidth(self._pin, pulse_us)
@@ -169,6 +169,6 @@ class HPS2518Servo:
 
     @staticmethod
     def _angle_to_duty(angle: float) -> float:
-        """Convert 0-180 degrees to duty cycle percent for 50 Hz PWM."""
-        pulse_us = _PULSE_MIN_US + (angle / 180.0) * (_PULSE_MAX_US - _PULSE_MIN_US)
+        """Convert 0-90 degrees to duty cycle percent for 50 Hz PWM."""
+        pulse_us = _PULSE_MIN_US + (angle / 90.0) * (_PULSE_MAX_US - _PULSE_MIN_US)
         return (pulse_us / _PERIOD_US) * 100.0
