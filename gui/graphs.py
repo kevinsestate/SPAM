@@ -127,12 +127,12 @@ class GraphsMixin:
             return fig, ax, canvas
 
         self.fig1, self.ax1, self.canvas1 = make_graph(center, 0, 0,
-            "Permittivity (\u03b5) vs Angle", "Permittivity (\u03b5)")
-        self.ax1.set_ylim(1.5, 2.5)
+            "S21 Magnitude vs Angle", "|S21| (dB)")
+        self.ax1.set_ylim(-40, 5)
 
         self.fig2, self.ax2, self.canvas2 = make_graph(center, 0, 1,
-            "Permeability (\u03bc) vs Angle", "Permeability (\u03bc)")
-        self.ax2.set_ylim(1.0, 2.0)
+            "S11 Magnitude vs Angle", "|S11| (dB)")
+        self.ax2.set_ylim(-40, 5)
 
         self.fig3, self.ax3, self.canvas3 = make_graph(center, 1, 0,
             "TX / RX Power vs Angle", "Power (dBm)")
@@ -185,95 +185,138 @@ class GraphsMixin:
         toggle_changed = getattr(self, '_last_adc_graph_enabled_state', None) != self.adc_demo_graph_enabled
         self._last_adc_graph_enabled_state = self.adc_demo_graph_enabled
         adc_stream_active = getattr(self, '_adc_stream_running', False)
-        if n == self._last_graph_count and n > 0 and not toggle_changed and not adc_stream_active:
+        if n == self._last_graph_count and n > 0 and not toggle_changed and not adc_stream_active and not self.is_measuring:
             return
         self._last_graph_count = n
         t = self.theme
         p1, p2 = t['plot1'], t['plot2']
 
+        # --- Separate measurements by polarization ---
+        pol0_m  = [m for m in measurements if (getattr(m, 'polarization', 0.0) or 0.0) < 45.0]
+        pol90_m = [m for m in measurements if (getattr(m, 'polarization', 0.0) or 0.0) >= 45.0]
+
+        # Sweep progress label
+        sweep_prog = ""
+        if self.is_measuring:
+            pol = getattr(self, 'current_polarization', 0.0)
+            pts = len(pol0_m) if pol < 45.0 else len(pol90_m)
+            sweep_num = 1 if pol < 45.0 else 2
+            sweep_prog = f"  — Sweep {sweep_num}/2 · {pts} pts"
+
         if not measurements:
             for ax, title, yl, ylim in [
-                (self.ax1, "Permittivity (\u03b5) vs Angle", "Permittivity (\u03b5)", (1.5, 2.5)),
-                (self.ax2, "Permeability (\u03bc) vs Angle", "Permeability (\u03bc)", (1.0, 2.0)),
+                (self.ax1, "S21 Magnitude vs Angle", "|S21| (dB)", (-40, 5)),
+                (self.ax2, "S11 Magnitude vs Angle", "|S11| (dB)", (-40, 5)),
                 (self.ax3, "TX / RX Power vs Angle", "Power (dBm)", (-30, 10)),
-                (self.ax4, "ADC Voltage vs Time", "Voltage (mV)", (0, 1000)),
             ]:
                 ax.clear()
                 ax.set_xlim(0, 90)
                 ax.set_ylim(*ylim)
                 self._style_ax(ax, title, yl)
-            if not self.adc_demo_graph_enabled:
-                self._render_adc_placeholder()
-            else:
-                self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
-                self.ax4.set_ylim(0.0, 1000.0)
-                self._style_ax(self.ax4, "ADC Voltage vs Time", "Voltage (mV)", xlabel="Time (s)")
-                self._render_adc_live_readout()
         else:
-            angles = [m.angle for m in measurements]
-            perm = [m.permittivity for m in measurements]
-            perm_b = [m.permeability for m in measurements]
+            # --- Graph 1: S21 magnitude (dB) vs angle, split by polarization ---
+            self.ax1.clear()
+            if pol0_m:
+                a0  = [m.angle for m in pol0_m]
+                s21_0 = [m.transmitted_power if m.transmitted_power is not None else -60.0 for m in pol0_m]
+                self.ax1.plot(a0, s21_0, color=p1, linewidth=1.8, marker='o', markersize=4,
+                              label='Pol 0°')
+            if pol90_m:
+                a90 = [m.angle for m in pol90_m]
+                s21_90 = [m.transmitted_power if m.transmitted_power is not None else -60.0 for m in pol90_m]
+                self.ax1.plot(a90, s21_90, color=p2, linewidth=1.8, marker='s', markersize=4,
+                              linestyle='--', label='Pol 90°')
+            if pol0_m or pol90_m:
+                all_a = [m.angle for m in measurements]
+                all_v = [m.transmitted_power for m in measurements if m.transmitted_power is not None]
+                self.ax1.set_xlim(max(0, min(all_a)-5), min(90, max(all_a)+5))
+                if all_v:
+                    self.ax1.set_ylim(min(all_v)-3, max(all_v)+3)
+                self.ax1.legend(loc='best', fontsize=8, framealpha=0.5)
+            self._style_ax(self.ax1, f"S21 Magnitude vs Angle{sweep_prog}", "|S21| (dB)")
+
+            # --- Graph 2: S11 magnitude (dB) vs angle, split by polarization ---
+            self.ax2.clear()
+            if pol0_m:
+                a0  = [m.angle for m in pol0_m]
+                s11_0 = [m.reflected_power if m.reflected_power is not None else -60.0 for m in pol0_m]
+                self.ax2.plot(a0, s11_0, color=p1, linewidth=1.8, marker='o', markersize=4,
+                              label='Pol 0°')
+            if pol90_m:
+                a90 = [m.angle for m in pol90_m]
+                s11_90 = [m.reflected_power if m.reflected_power is not None else -60.0 for m in pol90_m]
+                self.ax2.plot(a90, s11_90, color=p2, linewidth=1.8, marker='s', markersize=4,
+                              linestyle='--', label='Pol 90°')
+            if pol0_m or pol90_m:
+                all_a = [m.angle for m in measurements]
+                all_v = [m.reflected_power for m in measurements if m.reflected_power is not None]
+                self.ax2.set_xlim(max(0, min(all_a)-5), min(90, max(all_a)+5))
+                if all_v:
+                    self.ax2.set_ylim(min(all_v)-3, max(all_v)+3)
+                self.ax2.legend(loc='best', fontsize=8, framealpha=0.5)
+            self._style_ax(self.ax2, "S11 Magnitude vs Angle", "|S11| (dB)")
+
+            # --- Graph 3: TX/RX power with pol markers ---
             tx_pow = [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in measurements]
             rx_pow = [m.reflected_power if m.reflected_power is not None else 0.0 for m in measurements]
-            tx_ph = [m.transmitted_phase if m.transmitted_phase is not None else 0.0 for m in measurements]
-            rx_ph = [m.reflected_phase if m.reflected_phase is not None else 0.0 for m in measurements]
-
-            self.ax1.clear()
-            self.ax1.plot(angles, perm, color=p1, linewidth=1.8, label='\u03b5')
-            if angles:
-                self.ax1.set_xlim(max(0, min(angles)-5), min(90, max(angles)+5))
-                self.ax1.set_ylim(max(1.0, min(perm)-0.2), max(perm)+0.2)
-            self._style_ax(self.ax1, "Permittivity (\u03b5) vs Angle", "Permittivity (\u03b5)")
-
-            self.ax2.clear()
-            self.ax2.plot(angles, perm_b, color=p2, linewidth=1.8, label='\u03bc')
-            if angles:
-                self.ax2.set_xlim(max(0, min(angles)-5), min(90, max(angles)+5))
-                self.ax2.set_ylim(max(0.5, min(perm_b)-0.2), max(perm_b)+0.2)
-            self._style_ax(self.ax2, "Permeability (\u03bc) vs Angle", "Permeability (\u03bc)")
-
+            angles_all = [m.angle for m in measurements]
             self.ax3.clear()
-            self.ax3.plot(angles, tx_pow, color=p1, linewidth=1.8, label='TX', marker='o', markersize=3)
-            self.ax3.plot(angles, rx_pow, color=p2, linewidth=1.8, label='RX', marker='s', markersize=3)
-            self.ax3.legend(loc='best', fontsize=8, framealpha=0.5)
-            if angles:
-                self.ax3.set_xlim(max(0, min(angles)-5), min(90, max(angles)+5))
+            if pol0_m:
+                a0 = [m.angle for m in pol0_m]
+                self.ax3.plot(a0,
+                    [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in pol0_m],
+                    color=p1, linewidth=1.8, marker='o', markersize=3, label='TX 0°')
+                self.ax3.plot(a0,
+                    [m.reflected_power if m.reflected_power is not None else 0.0 for m in pol0_m],
+                    color=p1, linewidth=1.2, marker='o', markersize=3, linestyle=':', label='RX 0°', alpha=0.7)
+            if pol90_m:
+                a90 = [m.angle for m in pol90_m]
+                self.ax3.plot(a90,
+                    [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in pol90_m],
+                    color=p2, linewidth=1.8, marker='s', markersize=3, linestyle='--', label='TX 90°')
+                self.ax3.plot(a90,
+                    [m.reflected_power if m.reflected_power is not None else 0.0 for m in pol90_m],
+                    color=p2, linewidth=1.2, marker='s', markersize=3, linestyle=':', label='RX 90°', alpha=0.7)
+            self.ax3.legend(loc='best', fontsize=7, framealpha=0.5, ncol=2)
+            if angles_all:
+                self.ax3.set_xlim(max(0, min(angles_all)-5), min(90, max(angles_all)+5))
                 all_p = [v for v in tx_pow + rx_pow if v != 0.0]
                 if all_p:
                     self.ax3.set_ylim(min(all_p)-5, max(all_p)+5)
             self._style_ax(self.ax3, "TX / RX Power vs Angle", "Power (dBm)")
 
-            if not self.adc_demo_graph_enabled:
-                self._render_adc_placeholder()
+        # --- Graph 4: ADC live voltage (always shown during sweep, placeholder when idle) ---
+        if self.is_measuring or self.adc_demo_graph_enabled:
+            self.ax4.clear()
+            tt = self.adc_demo_t if self.adc_demo_t else []
+            txv = self.adc_demo_tx_v if self.adc_demo_tx_v else []
+            rxv = self.adc_demo_rx_v if self.adc_demo_rx_v else []
+            tx_mv = self._adc_demo_volts_to_mv(txv)
+            rx_mv = self._adc_demo_volts_to_mv(rxv)
+            n_pts = min(len(tt), len(tx_mv), len(rxv))
+            if n_pts > 0:
+                tt_p = tt[-n_pts:]
+                tx_p = tx_mv[-n_pts:]
+                rx_p = rx_mv[-n_pts:]
+                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=1.8, label='TX')
+                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=1.8, label='RX')
+                self.ax4.legend(loc='upper right', fontsize=8, framealpha=0.5)
+                x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
+                self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
+                y0, y1 = self._adc_demo_ylim_mv(tx_p, rx_p)
+                self.ax4.set_ylim(y0, y1)
             else:
-                self.ax4.clear()
-                tt = self.adc_demo_t if self.adc_demo_t else []
-                txv = self.adc_demo_tx_v if self.adc_demo_tx_v else []
-                rxv = self.adc_demo_rx_v if self.adc_demo_rx_v else []
-                tx_mv = self._adc_demo_volts_to_mv(txv)
-                rx_mv = self._adc_demo_volts_to_mv(rxv)
-                n_pts = min(len(tt), len(tx_mv), len(rxv))
-                if n_pts > 0:
-                    tt_p = tt[-n_pts:]
-                    tx_p = tx_mv[-n_pts:]
-                    rx_p = rx_mv[-n_pts:]
-                    self.ax4.plot(tt_p, tx_p, color=p1, linewidth=1.8, label='TX (mV)')
-                    self.ax4.plot(tt_p, rx_p, color=p2, linewidth=1.8, label='RX (mV)')
-                    self.ax4.legend(loc='upper right', fontsize=8, framealpha=0.5)
-                    x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
-                    self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
-                    y0, y1 = self._adc_demo_ylim_mv(tx_p, rx_p)
-                    self.ax4.set_ylim(y0, y1)
-                else:
-                    self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
-                    self.ax4.set_ylim(0.0, 1000.0)
-                adc_title = (
-                    f"ADC Voltage vs Time  "
-                    f"(N={self.adc_demo_sample_count}, "
-                    f"~{self.adc_demo_sample_rate_hz:.2f} samp/s)"
-                )
-                self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
-                self._render_adc_live_readout()
+                self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
+                self.ax4.set_ylim(0.0, 1000.0)
+            adc_title = (
+                f"ADC Live  "
+                f"(N={self.adc_demo_sample_count}, "
+                f"~{self.adc_demo_sample_rate_hz:.1f} samp/s)"
+            )
+            self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
+            self._render_adc_live_readout()
+        else:
+            self._render_adc_placeholder()
 
         for f in [self.fig1, self.fig2, self.fig3, self.fig4]:
             f.tight_layout(pad=1.5)
@@ -286,19 +329,29 @@ class GraphsMixin:
         if measurements:
             latest = measurements[0]
             self.angle_var.set(f"{latest.angle:.1f}\u00b0")
-            self.permittivity_var.set(f"{latest.permittivity:.4f}")
-            self.permeability_var.set(f"{latest.permeability:.4f}")
             self.current_angle = latest.angle
-            self.current_permittivity = latest.permittivity
-            self.current_permeability = latest.permeability
         else:
             self.angle_var.set("0.0\u00b0")
-            self.permittivity_var.set("0.00")
-            self.permeability_var.set("0.00")
+
+        # Live S-param display
+        self.s21_var.set(f"{self.s21_mag:.3f}\u2220{self.s21_phase:.1f}\u00b0")
         self.s11_var.set(f"{self.s11_mag:.3f}\u2220{self.s11_phase:.1f}\u00b0")
         self.s12_var.set(f"{self.s12_mag:.3f}\u2220{self.s12_phase:.1f}\u00b0")
-        self.s21_var.set(f"{self.s21_mag:.3f}\u2220{self.s21_phase:.1f}\u00b0")
         self.s22_var.set(f"{self.s22_mag:.3f}\u2220{self.s22_phase:.1f}\u00b0")
+
+        # Polarization + sweep progress
+        pol = getattr(self, 'current_polarization', 0.0)
+        self.polarization_var.set(f"{pol:.0f}\u00b0")
+        if self.is_measuring:
+            pol0_count = getattr(self, '_sweep_pts_pol0', 0)
+            pol90_count = getattr(self, '_sweep_pts_pol90', 0)
+            if pol < 45.0:
+                self.sweep_progress_var.set(f"Sweep 1/2 \u2014 {pol0_count}/17 pts")
+            else:
+                self.sweep_progress_var.set(f"Sweep 2/2 \u2014 {pol90_count}/17 pts")
+        else:
+            self.sweep_progress_var.set("Idle")
+
         self.motor_position_var.set(f"{self.current_angle:.1f}\u00b0")
         self.freq_var.set(f"{self.frequency:.1f} GHz")
         self.power_var.set(f"{self.power_level:.1f} dBm")
@@ -311,4 +364,6 @@ class GraphsMixin:
             self.noise_level = 0.0
         self.cal_error_var.set(f"{self.calibration_error:.2f}%")
         self.noise_var.set(f"{self.noise_level:.1f} dB")
-        self.after(2000, self._update_display)
+        # Faster refresh during sweep, slower when idle
+        interval = 500 if self.is_measuring else 2000
+        self.after(interval, self._update_display)

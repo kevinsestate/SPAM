@@ -19,6 +19,7 @@ class Measurement(Base):
     transmitted_phase = Column(Float, nullable=True)
     reflected_phase = Column(Float, nullable=True)
     s_matrix_json = Column(JSON, nullable=True)
+    polarization = Column(Float, nullable=True, default=0.0)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     def __repr__(self):

@@ -220,20 +220,30 @@ class MeasurementMixin:
         return transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag
 
     def _record_and_store(self, transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag):
-        """Record ADC sample, compute material properties, store measurement."""
+        """Record ADC sample, store measurement, update live S-param display vars."""
         self.transmitted_power = transmitted_power
         self.reflected_power = reflected_power
         self.transmitted_phase = transmitted_phase
         self.reflected_phase = reflected_phase
         self._record_adc_demo_sample(s21_mag, s11_mag)
-        angle_rad = math.radians(self.current_angle)
-        permittivity = 2.0 + 0.1 * math.sin(angle_rad)
-        permeability = 1.5 + 0.05 * math.cos(angle_rad)
-        self._create_measurement(self.current_angle, permittivity, permeability,
+
+        pol = getattr(self, 'current_polarization', 0.0)
+        self._create_measurement(self.current_angle, 0.0, 0.0,
                                  transmitted_power=transmitted_power, reflected_power=reflected_power,
-                                 transmitted_phase=transmitted_phase, reflected_phase=reflected_phase)
-        self.after(0, lambda tp=transmitted_power, rp=reflected_power: self._log_debug(
-            f"Pos: {self.current_angle:.2f}\u00b0 | TX: {tp:.1f}dBm | RX: {rp:.1f}dBm", "INFO"))
+                                 transmitted_phase=transmitted_phase, reflected_phase=reflected_phase,
+                                 polarization=pol)
+
+        # Update live S-param display vars
+        self.s21_mag = s21_mag
+        self.s21_phase = transmitted_phase
+        self.s11_mag = s11_mag
+        self.s11_phase = reflected_phase
+
+        pol_label = f"  [Pol {pol:.0f}\u00b0]" if pol != 0.0 else ""
+        self.after(0, lambda tp=transmitted_power, rp=reflected_power, a=self.current_angle, pl=pol_label:
+            self._log_debug(
+                f"Pos: {a:.1f}\u00b0{pl} | S21: {tp:.1f}dBm {self.s21_phase:.1f}\u00b0 | "
+                f"S11: {rp:.1f}dBm {self.s11_phase:.1f}\u00b0", "INFO"))
 
     def _move_motor_and_wait(self, motor_num, position, label="Motor"):
         """Send a motor move command and wait for completion. Returns True on success."""
@@ -269,11 +279,18 @@ class MeasurementMixin:
         arm_angle = 0.0
         material_angle = 0.0
         label = f"Pol {pol_angle:.0f}\u00b0"
+        is_pol90 = pol_angle >= 45.0
+        pts = 0
 
         self.current_angle = arm_angle
         self.current_polarization = pol_angle
         reading = self._take_adc_reading()
         self._record_and_store(*reading)
+        pts += 1
+        if is_pol90:
+            self._sweep_pts_pol90 = pts
+        else:
+            self._sweep_pts_pol0 = pts
 
         while self.is_measuring and arm_angle < max_arm_angle:
             arm_angle += arm_step
@@ -292,6 +309,11 @@ class MeasurementMixin:
 
             reading = self._take_adc_reading()
             self._record_and_store(*reading)
+            pts += 1
+            if is_pol90:
+                self._sweep_pts_pol90 = pts
+            else:
+                self._sweep_pts_pol0 = pts
 
             if int(arm_angle) % 10 == 0:
                 self.after(0, lambda a=arm_angle, lbl=label: self._log_debug(
@@ -300,6 +322,8 @@ class MeasurementMixin:
         return arm_angle >= max_arm_angle
 
     def _measurement_worker(self):
+        self._sweep_pts_pol0 = 0
+        self._sweep_pts_pol90 = 0
         # --- Polarization 0: sweep at horn 0 degrees ---
         self.after(0, lambda: self._log_debug("Sweep 1/2: horn at 0\u00b0", "INFO"))
         self.after(0, lambda: self._update_status("Sweep 1/2: horn 0\u00b0", "info"))
@@ -374,11 +398,13 @@ class MeasurementMixin:
             return
         self.is_measuring = True
         self._reset_adc_demo_series()
+        self._start_adc_stream_thread()
         self.current_angle = 0.0
+        self._cal_missing_warned = False
         self.status_var.set("Measuring...")
         self._update_status("Sweeping 0\u00b0 to 80\u00b0", "info")
         self._update_button_states()
-        self._log_debug("Sweep started", "INFO")
+        self._log_debug("Dual-polarization sweep started", "INFO")
         self.measurement_thread = threading.Thread(target=self._measurement_worker, daemon=True)
         self.measurement_thread.start()
 

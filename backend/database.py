@@ -40,6 +40,7 @@ def migrate_db():
             ("transmitted_phase",  "REAL"),
             ("reflected_phase",    "REAL"),
             ("s_matrix_json",      "TEXT"),
+            ("polarization",       "REAL"),
         ]
         for col_name, col_type in migrations:
             if col_name not in existing:

@@ -28,20 +28,66 @@ class ExtractionMixin:
     def _extraction_worker(self, measurements):
         import warnings as _w
         try:
-            angles = np.array([m.angle for m in measurements])
+            # --- Group by angle, pair pol-0 and pol-90 to build full 4x4 S-matrix ---
+            pol0 = {}   # angle -> measurement
+            pol90 = {}  # angle -> measurement
+            for m in measurements:
+                pol = getattr(m, 'polarization', None) or 0.0
+                # Round angle to nearest 0.5 deg for grouping
+                key = round(m.angle * 2) / 2.0
+                if pol >= 45.0:
+                    if key not in pol90:
+                        pol90[key] = m
+                else:
+                    if key not in pol0:
+                        pol0[key] = m
+
+            # Use angles that have at least pol-0 data
+            angle_keys = sorted(pol0.keys())
+            if not angle_keys:
+                angle_keys = sorted({round(m.angle * 2) / 2.0 for m in measurements})
+
+            angles = np.array(angle_keys)
             n = len(angles)
             s_matrices = np.zeros((n, 4, 4), dtype=complex)
-            for i, m in enumerate(measurements):
-                if m.s_matrix_json:
-                    s_matrices[i] = np.array(m.s_matrix_json, dtype=complex)
-                else:
-                    tp = m.transmitted_power if m.transmitted_power else 0.0
-                    rp = m.reflected_power if m.reflected_power else 0.0
-                    tph = m.transmitted_phase if m.transmitted_phase else 0.0
-                    rph = m.reflected_phase if m.reflected_phase else 0.0
-                    s21 = 10 ** (tp / 20.0) * np.exp(1j * np.deg2rad(tph))
-                    s11 = 10 ** (rp / 20.0) * np.exp(1j * np.deg2rad(rph))
-                    s_matrices[i] = np.array([[s11,0,0,0],[0,s11,0,0],[0,0,s21,0],[0,0,0,s21]])
+
+            for i, key in enumerate(angle_keys):
+                m0 = pol0.get(key)
+                m90 = pol90.get(key)
+
+                def _s_complex(m, use_s21=True):
+                    if m is None:
+                        return complex(0.0)
+                    if use_s21:
+                        tp = m.transmitted_power if m.transmitted_power else -60.0
+                        tph = m.transmitted_phase if m.transmitted_phase else 0.0
+                        return 10 ** (tp / 20.0) * np.exp(1j * np.deg2rad(tph))
+                    else:
+                        rp = m.reflected_power if m.reflected_power else -60.0
+                        rph = m.reflected_phase if m.reflected_phase else 0.0
+                        return 10 ** (rp / 20.0) * np.exp(1j * np.deg2rad(rph))
+
+                s21_hh = _s_complex(m0,  use_s21=True)
+                s11_hh = _s_complex(m0,  use_s21=False)
+                s21_vv = _s_complex(m90, use_s21=True)  if m90 else s21_hh
+                s11_vv = _s_complex(m90, use_s21=False) if m90 else s11_hh
+
+                # 4x4 SPAM S-matrix: [hh, vv] x [hh, vv] blocks
+                # S = [[S11_hh, 0,      0,      0     ],
+                #      [0,      S11_vv, 0,      0     ],
+                #      [0,      0,      S21_hh, 0     ],
+                #      [0,      0,      0,      S21_vv]]
+                s_matrices[i] = np.array([
+                    [s11_hh, 0,      0,      0     ],
+                    [0,      s11_vv, 0,      0     ],
+                    [0,      0,      s21_hh, 0     ],
+                    [0,      0,      0,      s21_vv],
+                ], dtype=complex)
+
+            pol_pairs = sum(1 for k in angle_keys if k in pol0 and k in pol90)
+            self.after(0, lambda: self._log_debug(
+                f"Extraction: {n} angles, {len(pol0)} pol-0° pts, "
+                f"{len(pol90)} pol-90° pts, {pol_pairs} paired", "INFO"))
             f_hz = self.extraction_f0_ghz * 1e9
             d_m = mil_to_m(self.extraction_d_mil)
             k0d = compute_k0d(f_hz, d_m)

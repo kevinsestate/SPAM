@@ -61,13 +61,15 @@ class DetailPanelMixin:
 
         # -- StringVars --
         self.angle_var = tk.StringVar(value="0.0\u00b0")
-        self.permittivity_var = tk.StringVar(value="0.00")
-        self.permeability_var = tk.StringVar(value="0.00")
+        self.permittivity_var = tk.StringVar(value="--")
+        self.permeability_var = tk.StringVar(value="--")
+        self.polarization_var = tk.StringVar(value="0\u00b0")
+        self.sweep_progress_var = tk.StringVar(value="Idle")
         self.status_var = tk.StringVar(value="Ready")
-        self.s11_var = tk.StringVar(value="0.00\u22200\u00b0")
-        self.s12_var = tk.StringVar(value="0.00\u22200\u00b0")
-        self.s21_var = tk.StringVar(value="0.00\u22200\u00b0")
-        self.s22_var = tk.StringVar(value="0.00\u22200\u00b0")
+        self.s11_var = tk.StringVar(value="0.000\u22200.0\u00b0")
+        self.s12_var = tk.StringVar(value="0.000\u22200.0\u00b0")
+        self.s21_var = tk.StringVar(value="0.000\u22200.0\u00b0")
+        self.s22_var = tk.StringVar(value="0.000\u22200.0\u00b0")
         self.system_status_var = tk.StringVar(value="Ready")
 
         self.freq_var = tk.StringVar(value="10.0 GHz")
@@ -81,9 +83,14 @@ class DetailPanelMixin:
 
         section(inner, "Measurement", [
             ("Angle", self.angle_var),
-            ("Permittivity (\u03b5)", self.permittivity_var),
-            ("Permeability (\u03bc)", self.permeability_var),
+            ("Polarization", self.polarization_var),
+            ("Sweep", self.sweep_progress_var),
             ("Status", self.status_var),
+        ])
+        section(inner, "Extracted Material", [
+            ("\u03b5r diag", self.extraction_eps_var),
+            ("\u03bcr diag", self.extraction_mu_var),
+            ("Fit Error", self.extraction_error_var),
         ])
         section(inner, "Motor", [
             ("Status", self.motor_status_var),
@@ -93,11 +100,8 @@ class DetailPanelMixin:
             ("S\u2081\u2081", self.s11_var), ("S\u2081\u2082", self.s12_var),
             ("S\u2082\u2081", self.s21_var), ("S\u2082\u2082", self.s22_var),
         ])
-        section(inner, "Extraction", [
+        section(inner, "Extraction Config", [
             ("Status", self.extraction_status_var),
-            ("Fit Error", self.extraction_error_var),
-            ("\u03b5r diag", self.extraction_eps_var),
-            ("\u03bcr diag", self.extraction_mu_var),
             ("Thickness (mil)", self.thickness_var),
             ("Tensor Type", self.extract_type_var),
         ])

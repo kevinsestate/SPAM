@@ -31,11 +31,13 @@ class DBMixin:
 
     def _create_measurement(self, angle, permittivity, permeability,
                             transmitted_power=None, reflected_power=None,
-                            transmitted_phase=None, reflected_phase=None):
+                            transmitted_phase=None, reflected_phase=None,
+                            polarization=0.0):
         try:
             m = Measurement(angle=angle, permittivity=permittivity, permeability=permeability,
                             transmitted_power=transmitted_power, reflected_power=reflected_power,
                             transmitted_phase=transmitted_phase, reflected_phase=reflected_phase,
+                            polarization=polarization,
                             timestamp=datetime.now())
             self.db.add(m)
             self.db.commit()

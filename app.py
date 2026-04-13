@@ -142,7 +142,9 @@ class SPAMGui(
 
         self._last_graph_count = -1
         self.adc_demo_window_sec = 45.0
-        self.adc_demo_graph_enabled = False
+        self.adc_demo_graph_enabled = True
+        self._sweep_pts_pol0 = 0
+        self._sweep_pts_pol90 = 0
         self.adc_demo_t = []
         self.adc_demo_tx_v = []
         self.adc_demo_rx_v = []
