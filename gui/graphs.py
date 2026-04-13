@@ -170,6 +170,7 @@ class GraphsMixin:
             _make_handler(_n, _cv)
 
         self.center_frame = center
+        self.bind('<Escape>', lambda e: self._restore_plots())
         self.measurement_angles = []
         self.measurement_permittivity = []
         self.measurement_permeability = []
@@ -210,14 +211,6 @@ class GraphsMixin:
                 frame.lift()
             else:
                 frame.grid_remove()
-        # Add restore hint to the maximised axes title
-        ax = getattr(self, f'ax{n}')
-        current = ax.get_title()
-        # Strip any existing hint before adding new one
-        for hint in (" \u2014 double-click to restore", " [\u2197]"):
-            current = current.replace(hint, "")
-        ax.set_title(current + " \u2014 double-click to restore",
-                     color=self._t('text'), fontsize=10, fontweight='bold', pad=8)
         canvas = getattr(self, f'canvas{n}')
         canvas.draw_idle()
 
@@ -236,11 +229,6 @@ class GraphsMixin:
 
     def _style_ax(self, ax, title, ylabel, xlabel="Angle (\u00b0)"):
         t = self.theme
-        # Re-append restore hint if this axes belongs to the maximised plot
-        axes_map = {1: self.ax1, 2: self.ax2, 3: self.ax3, 4: self.ax4}
-        mp = getattr(self, '_maximised_plot', None)
-        if mp and axes_map.get(mp) is ax:
-            title = title + " \u2014 double-click to restore"
         ax.set_title(title, color=t['text_em'], fontsize=12, fontweight='bold', pad=10)
         ax.set_xlabel(xlabel, color=t['text'], fontsize=11)
         ax.set_ylabel(ylabel, color=t['text'], fontsize=11)
