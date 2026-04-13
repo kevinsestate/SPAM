@@ -357,10 +357,10 @@ class MeasurementMixin:
             self.after(0, self._update_button_states)
             return
 
-        # --- Rotate horn 180 degrees (physical 90 deg polarization rotation) ---
-        self.after(0, lambda: self._log_debug("Rotating horn to 180\u00b0...", "INFO"))
-        self.after(0, lambda: self._update_status("Rotating horn to 180\u00b0...", "info"))
-        self._send_servo_command(180.0, settle_s=2.0)
+        # --- Rotate horn to 90 degrees (vertical polarization) ---
+        self.after(0, lambda: self._log_debug("Rotating horn to 90\u00b0 (vertical pol)...", "INFO"))
+        self.after(0, lambda: self._update_status("Rotating horn to 90\u00b0...", "info"))
+        self._send_servo_command(90.0, settle_s=2.0)
 
         if not self.is_measuring:
             self.after(0, lambda: self._log_debug("Stopped before sweep 2", "INFO"))
@@ -374,8 +374,8 @@ class MeasurementMixin:
 
         completed = self._run_single_sweep(pol_angle=90.0)
 
-        # --- Return horn to 0 degrees ---
-        self.after(0, lambda: self._log_debug("Returning horn to 0\u00b0", "INFO"))
+        # --- Return horn to 0 degrees (horizontal polarization) ---
+        self.after(0, lambda: self._log_debug("Returning horn to 0\u00b0 (horizontal pol)", "INFO"))
         self._send_servo_command(0.0, settle_s=2.0)
 
         self.is_measuring = False
