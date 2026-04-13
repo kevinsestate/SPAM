@@ -41,7 +41,7 @@ class HardwareMixin:
                             self.motor_movement_status = True
                             self.after(0, lambda: self.motor_status_var.set("Ready"))
                     except Exception as e:
-                        self.after(0, lambda: self._log_debug(f"Motor status error: {e}", "ERROR"))
+                        self.after(0, lambda e=e: self._log_debug(f"Motor status error: {e}", "ERROR"))
                 try:
                     GPIO.add_event_detect(isr_pin, GPIO.RISING, callback=handle_alert)
                     self.motor_isr_available = True
