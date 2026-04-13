@@ -104,6 +104,9 @@ class GraphsMixin:
         gc = t['grid']
         dpi = 72
 
+        self._maximised_plot = None
+        self._graph_grid_info = {}  # stores original grid kwargs per plot index
+
         def make_graph(parent, row, col, title_text, ylabel_text, xlabel_text="Angle (\u00b0)"):
             frame = tk.Frame(parent, bg=fc, highlightbackground=t['border'],
                              highlightthickness=1)
@@ -124,24 +127,39 @@ class GraphsMixin:
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
             canvas.draw_idle()
-            return fig, ax, canvas
+            return fig, ax, canvas, frame
 
-        self.fig1, self.ax1, self.canvas1 = make_graph(center, 0, 0,
+        self.fig1, self.ax1, self.canvas1, self.graph_frame1 = make_graph(center, 0, 0,
             "S21 Magnitude vs Angle", "|S21| (dB)")
         self.ax1.set_ylim(-40, 5)
+        self._graph_grid_info[1] = dict(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
-        self.fig2, self.ax2, self.canvas2 = make_graph(center, 0, 1,
+        self.fig2, self.ax2, self.canvas2, self.graph_frame2 = make_graph(center, 0, 1,
             "S11 Magnitude vs Angle", "|S11| (dB)")
         self.ax2.set_ylim(-40, 5)
+        self._graph_grid_info[2] = dict(row=0, column=1, sticky="nsew", padx=2, pady=2)
 
-        self.fig3, self.ax3, self.canvas3 = make_graph(center, 1, 0,
+        self.fig3, self.ax3, self.canvas3, self.graph_frame3 = make_graph(center, 1, 0,
             "TX / RX Power vs Angle", "Power (dBm)")
         self.ax3.set_ylim(-30, 10)
+        self._graph_grid_info[3] = dict(row=1, column=0, sticky="nsew", padx=2, pady=2)
 
-        self.fig4, self.ax4, self.canvas4 = make_graph(center, 1, 1,
+        self.fig4, self.ax4, self.canvas4, self.graph_frame4 = make_graph(center, 1, 1,
             "ADC Voltage vs Time", "Voltage (mV)", xlabel_text="Time (s)")
         self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
         self.ax4.set_ylim(0, 1000)
+        self._graph_grid_info[4] = dict(row=1, column=1, sticky="nsew", padx=2, pady=2)
+
+        # Bind double-click on each canvas to maximise/restore
+        _plot_map = [
+            (1, self.canvas1), (2, self.canvas2),
+            (3, self.canvas3), (4, self.canvas4),
+        ]
+        for _n, _cv in _plot_map:
+            _cv.get_tk_widget().bind(
+                "<Double-Button-1>",
+                lambda e, n=_n: self._toggle_maximise_plot(n)
+            )
 
         self.center_frame = center
         self.measurement_angles = []
@@ -165,8 +183,55 @@ class GraphsMixin:
             self.resize_timer = self.after(self.resize_delay, do_resize)
         self.bind('<Configure>', on_resize)
 
+    def _toggle_maximise_plot(self, n):
+        if self._maximised_plot == n:
+            self._restore_plots()
+        else:
+            self._maximise_plot(n)
+
+    def _maximise_plot(self, n):
+        self._maximised_plot = n
+        frames = {
+            1: self.graph_frame1, 2: self.graph_frame2,
+            3: self.graph_frame3, 4: self.graph_frame4,
+        }
+        for idx, frame in frames.items():
+            if idx == n:
+                frame.grid(row=0, column=0, rowspan=2, columnspan=2,
+                           sticky="nsew", padx=2, pady=2)
+                frame.lift()
+            else:
+                frame.grid_remove()
+        # Add restore hint to the maximised axes title
+        ax = getattr(self, f'ax{n}')
+        current = ax.get_title()
+        # Strip any existing hint before adding new one
+        for hint in (" \u2014 double-click to restore", " [\u2197]"):
+            current = current.replace(hint, "")
+        ax.set_title(current + " \u2014 double-click to restore",
+                     color=self._t('text'), fontsize=10, fontweight='bold', pad=8)
+        canvas = getattr(self, f'canvas{n}')
+        canvas.draw_idle()
+
+    def _restore_plots(self):
+        self._maximised_plot = None
+        frames = {
+            1: self.graph_frame1, 2: self.graph_frame2,
+            3: self.graph_frame3, 4: self.graph_frame4,
+        }
+        for idx, frame in frames.items():
+            info = self._graph_grid_info[idx]
+            frame.grid(**info)
+        for c in [self.canvas1, self.canvas2, self.canvas3, self.canvas4]:
+            c.draw_idle()
+
     def _style_ax(self, ax, title, ylabel, xlabel="Angle (\u00b0)"):
         t = self.theme
+        # Re-append restore hint if this axes belongs to the maximised plot
+        axes_map = {1: self.ax1, 2: self.ax2, 3: self.ax3, 4: self.ax4}
+        mp = getattr(self, '_maximised_plot', None)
+        if mp and axes_map.get(mp) is ax:
+            title = title + " \u2014 double-click to restore"
         ax.set_title(title, color=t['text'], fontsize=10, fontweight='bold', pad=8)
         ax.set_xlabel(xlabel, color=t['text_sec'], fontsize=9)
         ax.set_ylabel(ylabel, color=t['text_sec'], fontsize=9)
