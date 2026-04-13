@@ -41,9 +41,10 @@ class DetailPanelMixin:
 
         def section(parent, title, items, mono_val=True):
             hdr = tk.Frame(parent, bg=self._t('bg_panel'))
-            hdr.pack(fill=tk.X, padx=10, pady=(10, 0))
+            hdr.pack(fill=tk.X, padx=0, pady=(10, 0))
+            tk.Frame(hdr, bg=self._t('accent'), width=3).pack(side=tk.LEFT, fill=tk.Y, padx=(10, 6))
             tk.Label(hdr, text=title.upper(), bg=self._t('bg_panel'),
-                     fg=self._t('text_sec'), font=(_FONT, 8, "bold"),
+                     fg=self._t('text'), font=(_FONT, 9, "bold"),
                      anchor="w").pack(side=tk.LEFT)
             body = tk.Frame(parent, bg=self._t('bg_panel'))
             body.pack(fill=tk.X, padx=10, pady=(2, 0))

@@ -175,12 +175,20 @@ class CallbacksMixin:
 
     def _update_button_states(self):
         if hasattr(self, 'start_container') and hasattr(self, 'stop_container') and hasattr(self, 'clear_container'):
+            sidebar_bg = self._t('bg_sidebar')
             if self.is_measuring:
                 self.start_container.pack_forget()
                 self.stop_container.pack(fill=tk.X, padx=6, pady=3, before=self.clear_container)
+                btn = self.stop_button
+                real_bg = self._t('error')
             else:
                 self.stop_container.pack_forget()
                 self.start_container.pack(fill=tk.X, padx=6, pady=3, before=self.clear_container)
+                btn = self.start_button
+                real_bg = self._t('success')
+            if btn:
+                btn.config(bg=sidebar_bg)
+                self.after(120, lambda b=btn, c=real_bg: b.config(bg=c))
 
     def _on_export(self):
         ms = self._get_measurements()

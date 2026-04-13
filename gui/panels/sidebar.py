@@ -18,14 +18,16 @@ class SidebarMixin:
                  font=(_FONT, 18, "bold")).pack(pady=(12, 16))
         self._sep(rail)
 
-        icons = [
+        action_icons = [
             ("\u2699", "Calibrate",       self._on_calibrate,         "accent"),
             ("\u25b6", "Start",           self._on_start_measurement, "success"),
             ("\u25a0", "Stop",            self._on_stop_measurement,  "danger"),
             ("\u2715", "Clear",           self._on_clear_measurements,"warn"),
-            ("\u2261", "Results",         self._on_view_results,      "ghost"),
-            ("\u21e9", "Export",          self._on_export,            "ghost"),
-            ("\u2630", "Debug",           self._on_debug_console,     "ghost"),
+        ]
+        utility_icons = [
+            ("\u2756", "Results",         self._on_view_results,      "ghost"),
+            ("\u21a5", "Export",          self._on_export,            "ghost"),
+            (">_",     "Debug",           self._on_debug_console,     "ghost"),
         ]
 
         self.buttons = []
@@ -33,25 +35,24 @@ class SidebarMixin:
         self.start_container = None; self.stop_container = None
         self.clear_container = None
 
-        for icon, tip, cmd, sty in icons:
+        colors_map = {
+            "accent":  (self._t('accent'), self._t('accent_hover'), self._t('text_em')),
+            "success": (self._t('success'), '#3DAA9A',              self._t('text_em')),
+            "danger":  (self._t('error'),  '#D32F2F',               self._t('text_em')),
+            "warn":    (self._t('warning'),'#D4A017',               self._t('bg')),
+            "ghost":   (self._t('bg_sidebar'), self._t('border_vis'), self._t('text_sec')),
+        }
+
+        for icon, tip, cmd, sty in action_icons:
             ctr = tk.Frame(rail, bg=self._t('bg_sidebar'))
             ctr.pack(fill=tk.X, padx=6, pady=3)
-            colors_map = {
-                "accent":  (self._t('accent'), self._t('accent_hover'), self._t('text_em')),
-                "success": (self._t('success'), '#3DAA9A',              self._t('text_em')),
-                "danger":  (self._t('error'),  '#D32F2F',               self._t('text_em')),
-                "warn":    (self._t('warning'),'#D4A017',               self._t('bg')),
-                "ghost":   (self._t('bg_sidebar'), self._t('border_vis'), self._t('text_sec')),
-            }
-            bg_c, hover_c, fg_c = colors_map.get(sty, colors_map['ghost'])
+            bg_c, hover_c, fg_c = colors_map[sty]
             btn = tk.Button(ctr, text=icon, command=cmd, bg=bg_c, fg=fg_c,
                             activebackground=hover_c, activeforeground=fg_c,
                             font=(_ICON_FONT, 14), relief=tk.FLAT, bd=0,
                             highlightthickness=0, cursor="hand2")
-            btn.pack(fill=tk.X, ipady=4)
-
+            btn.pack(fill=tk.X, ipady=8)
             self._attach_tooltip(btn, tip, bg_c, hover_c)
-
             if tip == "Start":
                 self.start_button = btn; self.start_container = ctr
             elif tip == "Stop":
@@ -59,6 +60,21 @@ class SidebarMixin:
                 ctr.pack_forget()
             elif tip == "Clear":
                 self.clear_container = ctr
+            self.buttons.append(btn)
+
+        self._sep(rail)
+
+        for icon, tip, cmd, sty in utility_icons:
+            ctr = tk.Frame(rail, bg=self._t('bg_sidebar'))
+            ctr.pack(fill=tk.X, padx=6, pady=3)
+            bg_c, hover_c, fg_c = colors_map[sty]
+            font = (_FONT, 9, "bold") if icon == ">_" else (_ICON_FONT, 14)
+            btn = tk.Button(ctr, text=icon, command=cmd, bg=bg_c, fg=fg_c,
+                            activebackground=hover_c, activeforeground=fg_c,
+                            font=font, relief=tk.FLAT, bd=0,
+                            highlightthickness=0, cursor="hand2")
+            btn.pack(fill=tk.X, ipady=8)
+            self._attach_tooltip(btn, tip, bg_c, hover_c)
             self.buttons.append(btn)
 
         tk.Frame(rail, bg=self._t('bg_sidebar')).pack(expand=True)

@@ -1,6 +1,7 @@
 """StatusBarMixin: bottom status bar creation."""
 
 import tkinter as tk
+from datetime import datetime
 
 from ..themes import _FONT
 
@@ -26,3 +27,11 @@ class StatusBarMixin:
                                    fg=self._t('text_sec'), font=(_FONT, 8))
         self.time_label.pack(side=tk.RIGHT, padx=10)
         self.status_frame = sf
+        self._tick_clock()
+
+    def _tick_clock(self):
+        try:
+            self.time_label.config(text=datetime.now().strftime("%H:%M:%S"))
+            self.after(1000, self._tick_clock)
+        except tk.TclError:
+            pass

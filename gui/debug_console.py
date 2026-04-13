@@ -17,18 +17,21 @@ class DebugConsole(tk.Toplevel):
         self.parent = parent
         t = parent.theme
         self.title("SPAM - Debug Console")
-        self.geometry("900x600")
+        self.geometry("1000x650")
         self.configure(bg=t['bg'])
         self.transient(parent)
         self.grab_set()
 
+        self._autoscroll_var = tk.BooleanVar(value=True)
+        self._log_count_var = tk.StringVar(value="0 entries")
+
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
+        self._create_console_tab()
         self._create_system_tab()
         self._create_database_tab()
         self._create_measurement_tab()
-        self._create_console_tab()
         self._create_config_tab()
         self._create_motor_tab()
 
@@ -91,7 +94,43 @@ class DebugConsole(tk.Toplevel):
     def _create_console_tab(self):
         f = tk.Frame(self.notebook, bg=self._t('bg'))
         self.notebook.add(f, text="Console")
-        self.console_text = self._text_widget(f, dark_bg=True)
+
+        # text area
+        bg = "#1A1A1A"
+        fg = "#CCCCCC"
+        tf = tk.Frame(f, bg=bg)
+        tf.pack(fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(tf, orient=tk.VERTICAL)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tw = tk.Text(tf, bg=bg, fg=fg, font=(_MONO, 10), yscrollcommand=sb.set,
+                     wrap=tk.WORD, padx=10, pady=8, insertbackground=fg,
+                     relief=tk.FLAT, bd=0, state=tk.DISABLED)
+        tw.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=tw.yview)
+        self.console_text = tw
+
+        # color tags
+        tw.tag_configure("SUCCESS", foreground="#4EC9B0")
+        tw.tag_configure("ERROR",   foreground="#F44747")
+        tw.tag_configure("WARNING", foreground="#DCDCAA")
+        tw.tag_configure("INFO",    foreground="#CCCCCC")
+        tw.tag_configure("DEBUG",   foreground="#858585")
+
+        # footer bar
+        footer = tk.Frame(f, bg=self._t('bg_elevated'), height=32)
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        footer.pack_propagate(False)
+        self.parent._make_btn(footer, "Clear Log", self._clear_log, "ghost").pack(
+            side=tk.LEFT, padx=(6, 0), pady=4)
+        tk.Checkbutton(
+            footer, text="Auto-scroll", variable=self._autoscroll_var,
+            bg=self._t('bg_elevated'), fg=self._t('text_sec'),
+            selectcolor=self._t('bg_input'), activebackground=self._t('bg_elevated'),
+            font=(_FONT, 9), bd=0, highlightthickness=0
+        ).pack(side=tk.LEFT, padx=8, pady=4)
+        tk.Label(footer, textvariable=self._log_count_var,
+                 bg=self._t('bg_elevated'), fg=self._t('text_sec'),
+                 font=(_FONT, 8)).pack(side=tk.RIGHT, padx=10)
 
     def _create_config_tab(self):
         f = tk.Frame(self.notebook, bg=self._t('bg'))
@@ -200,12 +239,27 @@ class DebugConsole(tk.Toplevel):
         except:
             pass
 
+    def _clear_log(self):
+        self.parent.debug_log.clear()
+        self.update_console_log()
+
     def update_console_log(self):
-        self.console_text.config(state=tk.NORMAL)
-        self.console_text.delete(1.0, tk.END)
-        self.console_text.insert(1.0, "\n".join(self.parent.debug_log[-100:]) if self.parent.debug_log else "No log entries.")
-        self.console_text.see(tk.END)
-        self.console_text.config(state=tk.DISABLED)
+        tw = self.console_text
+        tw.config(state=tk.NORMAL)
+        tw.delete(1.0, tk.END)
+        lines = self.parent.debug_log[-200:] if self.parent.debug_log else ["No log entries."]
+        for line in lines:
+            tag = "INFO"
+            for lvl in ("SUCCESS", "ERROR", "WARNING", "DEBUG"):
+                if f"[{lvl}]" in line:
+                    tag = lvl
+                    break
+            tw.insert(tk.END, line + "\n", tag)
+        if self._autoscroll_var.get():
+            tw.see(tk.END)
+        tw.config(state=tk.DISABLED)
+        count = len(self.parent.debug_log)
+        self._log_count_var.set(f"{count} {'entry' if count == 1 else 'entries'}")
 
     def _update_config(self):
         info = ["CONFIG", "=" * 50, ""]
