@@ -72,10 +72,10 @@ class HPS2518Servo:
         if _USE_PIGPIO:
             self._pi = _pigpio.pi()
             if self._pi.connected:
-                self._pi.set_servo_pulsewidth(self._pin, _PULSE_MIN_US)
-                self._angle = 0.0
+                self._pi.set_servo_pulsewidth(self._pin, 0)
+                self._angle = None
                 self._log(
-                    f"HPS2518Servo: initialized (pigpio) on GPIO{gpio_pin}, homed to 0°",
+                    f"HPS2518Servo: initialized (pigpio) on GPIO{gpio_pin}, PWM idle",
                     "SUCCESS"
                 )
             else:
@@ -90,10 +90,10 @@ class HPS2518Servo:
         _GPIO.setmode(_GPIO.BCM)
         _GPIO.setup(self._pin, _GPIO.OUT)
         self._pwm = _GPIO.PWM(self._pin, _PWM_FREQ_HZ)
-        self._pwm.start(self._angle_to_duty(0.0))
-        self._angle = 0.0
+        self._pwm.start(0)
+        self._angle = None
         self._log(
-            f"HPS2518Servo: initialized (RPi.GPIO) on GPIO{gpio_pin}, homed to 0°",
+            f"HPS2518Servo: initialized (RPi.GPIO) on GPIO{gpio_pin}, PWM idle",
             "SUCCESS"
         )
 
@@ -119,14 +119,16 @@ class HPS2518Servo:
         if self._pi is not None:
             self._pi.set_servo_pulsewidth(self._pin, pulse_us)
             time.sleep(settle_s)
+            self._pi.set_servo_pulsewidth(self._pin, 0)
             self._angle = angle
-            self._log(f"HPS2518Servo: -> {angle:.1f}° (pulse={pulse_us}µs)", "INFO")
+            self._log(f"HPS2518Servo: -> {angle:.1f}° (pulse={pulse_us}µs, released)", "INFO")
         elif self._pwm is not None:
             duty = self._angle_to_duty(angle)
             self._pwm.ChangeDutyCycle(duty)
             time.sleep(settle_s)
+            self._pwm.ChangeDutyCycle(0)
             self._angle = angle
-            self._log(f"HPS2518Servo: -> {angle:.1f}° (duty={duty:.2f}%)", "INFO")
+            self._log(f"HPS2518Servo: -> {angle:.1f}° (duty={duty:.2f}%, released)", "INFO")
 
     @property
     def current_angle(self) -> float | None:
