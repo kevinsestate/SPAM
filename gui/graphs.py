@@ -100,8 +100,8 @@ class GraphsMixin:
 
         t = self.theme
         fc = t['bg_panel']
-        tc = t['text']
-        sc = t['text_sec']
+        tc = t['text_em']   # white titles
+        sc = t['text']      # light gray labels/ticks
         gc = t['grid']
         dpi = 72
 
@@ -118,8 +118,8 @@ class GraphsMixin:
             ax.set_title(title_text, color=tc, fontsize=12, fontweight='bold', pad=10)
             ax.set_xlabel(xlabel_text, color=sc, fontsize=11)
             ax.set_ylabel(ylabel_text, color=sc, fontsize=11)
-            ax.grid(True, alpha=0.4, color=gc, linestyle='--', linewidth=0.6)
-            ax.tick_params(colors=sc, labelsize=10)
+            ax.grid(True, alpha=0.5, color=gc, linestyle='--', linewidth=0.6)
+            ax.tick_params(colors=sc, labelsize=10, labelcolor=sc)
             for sp in ['top', 'right']:
                 ax.spines[sp].set_visible(False)
             for sp in ['left', 'bottom']:
@@ -133,24 +133,24 @@ class GraphsMixin:
         self.fig1, self.ax1, self.canvas1, self.graph_frame1 = make_graph(center, 0, 0,
             "S21 Magnitude vs Angle", "|S21| (dB)")
         self.ax1.set_ylim(-40, 5)
-        self._graph_grid_info[1] = dict(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._graph_grid_info[1] = dict(row=0, column=0, rowspan=1, columnspan=1, sticky="nsew", padx=2, pady=2)
 
         self.fig2, self.ax2, self.canvas2, self.graph_frame2 = make_graph(center, 0, 1,
             "S11 Magnitude vs Angle", "|S11| (dB)")
         self.ax2.set_ylim(-40, 5)
-        self._graph_grid_info[2] = dict(row=0, column=1, sticky="nsew", padx=2, pady=2)
+        self._graph_grid_info[2] = dict(row=0, column=1, rowspan=1, columnspan=1, sticky="nsew", padx=2, pady=2)
 
         self.fig3, self.ax3, self.canvas3, self.graph_frame3 = make_graph(center, 1, 0,
             "S21 \u2044 S11 Phase vs Angle", "Phase (\u00b0)")
         self.ax3.set_ylim(-180, 180)
         self.ax3.set_yticks([-180, -90, 0, 90, 180])
-        self._graph_grid_info[3] = dict(row=1, column=0, sticky="nsew", padx=2, pady=2)
+        self._graph_grid_info[3] = dict(row=1, column=0, rowspan=1, columnspan=1, sticky="nsew", padx=2, pady=2)
 
         self.fig4, self.ax4, self.canvas4, self.graph_frame4 = make_graph(center, 1, 1,
             "ADC Voltage vs Time", "Voltage (mV)", xlabel_text="Time (s)")
         self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
         self.ax4.set_ylim(0, 1000)
-        self._graph_grid_info[4] = dict(row=1, column=1, sticky="nsew", padx=2, pady=2)
+        self._graph_grid_info[4] = dict(row=1, column=1, rowspan=1, columnspan=1, sticky="nsew", padx=2, pady=2)
 
         # Double-click via mpl event (more reliable than Tkinter binding through canvas)
         self._mpl_last_click = {}  # canvas_n -> timestamp
@@ -229,7 +229,8 @@ class GraphsMixin:
         }
         for idx, frame in frames.items():
             info = self._graph_grid_info[idx]
-            frame.grid(**info)
+            frame.grid(**info)  # rowspan=1, columnspan=1 always stored explicitly
+        self.center_frame.update_idletasks()  # force geometry recalc immediately
         for c in [self.canvas1, self.canvas2, self.canvas3, self.canvas4]:
             c.draw_idle()
 
@@ -240,11 +241,11 @@ class GraphsMixin:
         mp = getattr(self, '_maximised_plot', None)
         if mp and axes_map.get(mp) is ax:
             title = title + " \u2014 double-click to restore"
-        ax.set_title(title, color=t['text'], fontsize=12, fontweight='bold', pad=10)
-        ax.set_xlabel(xlabel, color=t['text_sec'], fontsize=11)
-        ax.set_ylabel(ylabel, color=t['text_sec'], fontsize=11)
-        ax.grid(True, alpha=0.4, color=t['grid'], linestyle='--', linewidth=0.6)
-        ax.tick_params(colors=t['text_sec'], labelsize=10)
+        ax.set_title(title, color=t['text_em'], fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel(xlabel, color=t['text'], fontsize=11)
+        ax.set_ylabel(ylabel, color=t['text'], fontsize=11)
+        ax.grid(True, alpha=0.5, color=t['grid'], linestyle='--', linewidth=0.6)
+        ax.tick_params(colors=t['text'], labelsize=10, labelcolor=t['text'])
         for sp in ['top', 'right']:
             ax.spines[sp].set_visible(False)
         for sp in ['left', 'bottom']:
