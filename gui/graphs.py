@@ -1,5 +1,6 @@
 """GraphsMixin: center panel, graph updates, _update_display."""
 
+import time
 import tkinter as tk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -114,16 +115,16 @@ class GraphsMixin:
             fig = Figure(figsize=(5, 3), dpi=dpi, facecolor=fc)
             ax = fig.add_subplot(111, facecolor=fc)
             ax.set_xlim(0, 90)
-            ax.set_title(title_text, color=tc, fontsize=10, fontweight='bold', pad=8)
-            ax.set_xlabel(xlabel_text, color=sc, fontsize=9)
-            ax.set_ylabel(ylabel_text, color=sc, fontsize=9)
-            ax.grid(True, alpha=0.4, color=gc, linestyle='--', linewidth=0.5)
-            ax.tick_params(colors=sc, labelsize=8)
+            ax.set_title(title_text, color=tc, fontsize=12, fontweight='bold', pad=10)
+            ax.set_xlabel(xlabel_text, color=sc, fontsize=11)
+            ax.set_ylabel(ylabel_text, color=sc, fontsize=11)
+            ax.grid(True, alpha=0.4, color=gc, linestyle='--', linewidth=0.6)
+            ax.tick_params(colors=sc, labelsize=10)
             for sp in ['top', 'right']:
                 ax.spines[sp].set_visible(False)
             for sp in ['left', 'bottom']:
                 ax.spines[sp].set_color(t['border'])
-            fig.tight_layout(pad=1.5)
+            fig.tight_layout(pad=2.0)
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
             canvas.draw_idle()
@@ -140,8 +141,9 @@ class GraphsMixin:
         self._graph_grid_info[2] = dict(row=0, column=1, sticky="nsew", padx=2, pady=2)
 
         self.fig3, self.ax3, self.canvas3, self.graph_frame3 = make_graph(center, 1, 0,
-            "TX / RX Power vs Angle", "Power (dBm)")
-        self.ax3.set_ylim(-30, 10)
+            "S21 \u2044 S11 Phase vs Angle", "Phase (\u00b0)")
+        self.ax3.set_ylim(-180, 180)
+        self.ax3.set_yticks([-180, -90, 0, 90, 180])
         self._graph_grid_info[3] = dict(row=1, column=0, sticky="nsew", padx=2, pady=2)
 
         self.fig4, self.ax4, self.canvas4, self.graph_frame4 = make_graph(center, 1, 1,
@@ -150,16 +152,22 @@ class GraphsMixin:
         self.ax4.set_ylim(0, 1000)
         self._graph_grid_info[4] = dict(row=1, column=1, sticky="nsew", padx=2, pady=2)
 
-        # Bind double-click on each canvas to maximise/restore
+        # Double-click via mpl event (more reliable than Tkinter binding through canvas)
+        self._mpl_last_click = {}  # canvas_n -> timestamp
         _plot_map = [
             (1, self.canvas1), (2, self.canvas2),
             (3, self.canvas3), (4, self.canvas4),
         ]
         for _n, _cv in _plot_map:
-            _cv.get_tk_widget().bind(
-                "<Double-Button-1>",
-                lambda e, n=_n: self._toggle_maximise_plot(n)
-            )
+            def _make_handler(n, cv):
+                def _on_click(event):
+                    now = time.time()
+                    last = self._mpl_last_click.get(n, 0.0)
+                    self._mpl_last_click[n] = now
+                    if now - last < 0.4:  # 400 ms double-click window
+                        self._toggle_maximise_plot(n)
+                cv.mpl_connect('button_press_event', _on_click)
+            _make_handler(_n, _cv)
 
         self.center_frame = center
         self.measurement_angles = []
@@ -232,11 +240,11 @@ class GraphsMixin:
         mp = getattr(self, '_maximised_plot', None)
         if mp and axes_map.get(mp) is ax:
             title = title + " \u2014 double-click to restore"
-        ax.set_title(title, color=t['text'], fontsize=10, fontweight='bold', pad=8)
-        ax.set_xlabel(xlabel, color=t['text_sec'], fontsize=9)
-        ax.set_ylabel(ylabel, color=t['text_sec'], fontsize=9)
-        ax.grid(True, alpha=0.4, color=t['grid'], linestyle='--', linewidth=0.5)
-        ax.tick_params(colors=t['text_sec'], labelsize=8)
+        ax.set_title(title, color=t['text'], fontsize=12, fontweight='bold', pad=10)
+        ax.set_xlabel(xlabel, color=t['text_sec'], fontsize=11)
+        ax.set_ylabel(ylabel, color=t['text_sec'], fontsize=11)
+        ax.grid(True, alpha=0.4, color=t['grid'], linestyle='--', linewidth=0.6)
+        ax.tick_params(colors=t['text_sec'], labelsize=10)
         for sp in ['top', 'right']:
             ax.spines[sp].set_visible(False)
         for sp in ['left', 'bottom']:
@@ -272,7 +280,7 @@ class GraphsMixin:
             for ax, title, yl, ylim in [
                 (self.ax1, "S21 Magnitude vs Angle", "|S21| (dB)", (-40, 5)),
                 (self.ax2, "S11 Magnitude vs Angle", "|S11| (dB)", (-40, 5)),
-                (self.ax3, "TX / RX Power vs Angle", "Power (dBm)", (-30, 10)),
+                (self.ax3, "S21 \u2044 S11 Phase vs Angle", "Phase (\u00b0)", (-180, 180)),
             ]:
                 ax.clear()
                 ax.set_xlim(0, 90)
@@ -282,73 +290,72 @@ class GraphsMixin:
             # --- Graph 1: S21 magnitude (dB) vs angle, split by polarization ---
             self.ax1.clear()
             if pol0_m:
-                a0  = [m.angle for m in pol0_m]
+                a0 = [m.angle for m in pol0_m]
                 s21_0 = [m.transmitted_power if m.transmitted_power is not None else -60.0 for m in pol0_m]
-                self.ax1.plot(a0, s21_0, color=p1, linewidth=1.8, marker='o', markersize=4,
-                              label='Pol 0°')
+                self.ax1.plot(a0, s21_0, color=p1, linewidth=2.2, marker='o', markersize=6,
+                              label='Pol 0\u00b0')
             if pol90_m:
                 a90 = [m.angle for m in pol90_m]
                 s21_90 = [m.transmitted_power if m.transmitted_power is not None else -60.0 for m in pol90_m]
-                self.ax1.plot(a90, s21_90, color=p2, linewidth=1.8, marker='s', markersize=4,
-                              linestyle='--', label='Pol 90°')
+                self.ax1.plot(a90, s21_90, color=p2, linewidth=2.2, marker='s', markersize=6,
+                              linestyle='--', label='Pol 90\u00b0')
             if pol0_m or pol90_m:
                 all_a = [m.angle for m in measurements]
                 all_v = [m.transmitted_power for m in measurements if m.transmitted_power is not None]
-                self.ax1.set_xlim(max(0, min(all_a)-5), min(90, max(all_a)+5))
+                self.ax1.set_xlim(max(0, min(all_a) - 5), min(90, max(all_a) + 5))
                 if all_v:
-                    self.ax1.set_ylim(min(all_v)-3, max(all_v)+3)
-                self.ax1.legend(loc='best', fontsize=8, framealpha=0.5)
+                    self.ax1.set_ylim(min(all_v) - 3, max(all_v) + 3)
+                self.ax1.legend(loc='best', fontsize=10, framealpha=0.7)
             self._style_ax(self.ax1, f"S21 Magnitude vs Angle{sweep_prog}", "|S21| (dB)")
 
             # --- Graph 2: S11 magnitude (dB) vs angle, split by polarization ---
             self.ax2.clear()
             if pol0_m:
-                a0  = [m.angle for m in pol0_m]
+                a0 = [m.angle for m in pol0_m]
                 s11_0 = [m.reflected_power if m.reflected_power is not None else -60.0 for m in pol0_m]
-                self.ax2.plot(a0, s11_0, color=p1, linewidth=1.8, marker='o', markersize=4,
-                              label='Pol 0°')
+                self.ax2.plot(a0, s11_0, color=p1, linewidth=2.2, marker='o', markersize=6,
+                              label='Pol 0\u00b0')
             if pol90_m:
                 a90 = [m.angle for m in pol90_m]
                 s11_90 = [m.reflected_power if m.reflected_power is not None else -60.0 for m in pol90_m]
-                self.ax2.plot(a90, s11_90, color=p2, linewidth=1.8, marker='s', markersize=4,
-                              linestyle='--', label='Pol 90°')
+                self.ax2.plot(a90, s11_90, color=p2, linewidth=2.2, marker='s', markersize=6,
+                              linestyle='--', label='Pol 90\u00b0')
             if pol0_m or pol90_m:
                 all_a = [m.angle for m in measurements]
                 all_v = [m.reflected_power for m in measurements if m.reflected_power is not None]
-                self.ax2.set_xlim(max(0, min(all_a)-5), min(90, max(all_a)+5))
+                self.ax2.set_xlim(max(0, min(all_a) - 5), min(90, max(all_a) + 5))
                 if all_v:
-                    self.ax2.set_ylim(min(all_v)-3, max(all_v)+3)
-                self.ax2.legend(loc='best', fontsize=8, framealpha=0.5)
+                    self.ax2.set_ylim(min(all_v) - 3, max(all_v) + 3)
+                self.ax2.legend(loc='best', fontsize=10, framealpha=0.7)
             self._style_ax(self.ax2, "S11 Magnitude vs Angle", "|S11| (dB)")
 
-            # --- Graph 3: TX/RX power with pol markers ---
-            tx_pow = [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in measurements]
-            rx_pow = [m.reflected_power if m.reflected_power is not None else 0.0 for m in measurements]
-            angles_all = [m.angle for m in measurements]
+            # --- Graph 3: S21 + S11 Phase vs Angle ---
             self.ax3.clear()
             if pol0_m:
                 a0 = [m.angle for m in pol0_m]
-                self.ax3.plot(a0,
-                    [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in pol0_m],
-                    color=p1, linewidth=1.8, marker='o', markersize=3, label='TX 0°')
-                self.ax3.plot(a0,
-                    [m.reflected_power if m.reflected_power is not None else 0.0 for m in pol0_m],
-                    color=p1, linewidth=1.2, marker='o', markersize=3, linestyle=':', label='RX 0°', alpha=0.7)
+                ph21_0 = [m.transmitted_phase if m.transmitted_phase is not None else 0.0 for m in pol0_m]
+                ph11_0 = [m.reflected_phase if m.reflected_phase is not None else 0.0 for m in pol0_m]
+                self.ax3.plot(a0, ph21_0, color=p1, linewidth=2.2, marker='o', markersize=6,
+                              label='S21 0\u00b0')
+                self.ax3.plot(a0, ph11_0, color=p1, linewidth=1.6, marker='o', markersize=5,
+                              linestyle=':', alpha=0.75, label='S11 0\u00b0')
             if pol90_m:
                 a90 = [m.angle for m in pol90_m]
-                self.ax3.plot(a90,
-                    [m.transmitted_power if m.transmitted_power is not None else 0.0 for m in pol90_m],
-                    color=p2, linewidth=1.8, marker='s', markersize=3, linestyle='--', label='TX 90°')
-                self.ax3.plot(a90,
-                    [m.reflected_power if m.reflected_power is not None else 0.0 for m in pol90_m],
-                    color=p2, linewidth=1.2, marker='s', markersize=3, linestyle=':', label='RX 90°', alpha=0.7)
-            self.ax3.legend(loc='best', fontsize=7, framealpha=0.5, ncol=2)
-            if angles_all:
-                self.ax3.set_xlim(max(0, min(angles_all)-5), min(90, max(angles_all)+5))
-                all_p = [v for v in tx_pow + rx_pow if v != 0.0]
-                if all_p:
-                    self.ax3.set_ylim(min(all_p)-5, max(all_p)+5)
-            self._style_ax(self.ax3, "TX / RX Power vs Angle", "Power (dBm)")
+                ph21_90 = [m.transmitted_phase if m.transmitted_phase is not None else 0.0 for m in pol90_m]
+                ph11_90 = [m.reflected_phase if m.reflected_phase is not None else 0.0 for m in pol90_m]
+                self.ax3.plot(a90, ph21_90, color=p2, linewidth=2.2, marker='s', markersize=6,
+                              linestyle='--', label='S21 90\u00b0')
+                self.ax3.plot(a90, ph11_90, color=p2, linewidth=1.6, marker='s', markersize=5,
+                              linestyle='-.', alpha=0.75, label='S11 90\u00b0')
+            self.ax3.axhline(0, color=t['border'], linewidth=0.8, linestyle='-')
+            self.ax3.set_ylim(-180, 180)
+            self.ax3.set_yticks([-180, -90, 0, 90, 180])
+            if measurements:
+                all_a = [m.angle for m in measurements]
+                self.ax3.set_xlim(max(0, min(all_a) - 5), min(90, max(all_a) + 5))
+            if pol0_m or pol90_m:
+                self.ax3.legend(loc='best', fontsize=9, framealpha=0.7, ncol=2)
+            self._style_ax(self.ax3, "S21 \u2044 S11 Phase vs Angle", "Phase (\u00b0)")
 
         # --- Graph 4: ADC live voltage — only redraw when ADC data changed ---
         if self.is_measuring or self.adc_demo_graph_enabled:
@@ -363,9 +370,9 @@ class GraphsMixin:
                 tt_p = tt[-n_pts:]
                 tx_p = tx_mv[-n_pts:]
                 rx_p = rx_mv[-n_pts:]
-                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=1.8, label='TX')
-                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=1.8, label='RX')
-                self.ax4.legend(loc='upper right', fontsize=8, framealpha=0.5)
+                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=2.2, label='TX')
+                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=2.2, label='RX')
+                self.ax4.legend(loc='upper right', fontsize=10, framealpha=0.7)
                 x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
                 self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
                 y0, y1 = self._adc_demo_ylim_mv(tx_p, rx_p)
