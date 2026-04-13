@@ -333,6 +333,8 @@ class MeasurementMixin:
 
         if not self.is_measuring or not completed:
             self.is_measuring = False
+            self.after(0, lambda: self.motor_position_var.set("0.0\u00b0"))
+            self.after(0, lambda: self.motor_status_var.set("Ready"))
             self.after(0, lambda: self._log_debug(
                 f"Stopped during sweep 1 at {self.current_angle:.1f}\u00b0", "INFO"))
             self.after(0, lambda: self._update_status(
@@ -363,6 +365,8 @@ class MeasurementMixin:
         self._send_servo_command(90.0, settle_s=2.0)
 
         if not self.is_measuring:
+            self.after(0, lambda: self.motor_position_var.set("0.0\u00b0"))
+            self.after(0, lambda: self.motor_status_var.set("Ready"))
             self.after(0, lambda: self._log_debug("Stopped before sweep 2", "INFO"))
             self.after(0, lambda: self.status_var.set("Ready"))
             self.after(0, self._update_button_states)
@@ -380,11 +384,22 @@ class MeasurementMixin:
 
         self.is_measuring = False
 
+        # Reset motor display
+        self.after(0, lambda: self.motor_position_var.set("0.0\u00b0"))
+        self.after(0, lambda: self.motor_status_var.set("Ready"))
+
         if completed:
             self.after(0, lambda: self._log_debug(
                 "Dual-polarization sweep complete (0\u00b0 + 90\u00b0)", "SUCCESS"))
             self.after(0, lambda: self._update_status("Dual sweep complete", "success"))
-            self.after(100, self._run_extraction)
+            # Only run extraction if calibration data is loaded
+            has_cal = bool(getattr(self, 'cal_through', None))
+            if has_cal:
+                self.after(100, self._run_extraction)
+            else:
+                self.after(0, lambda: self._log_debug(
+                    "Calibrate first before extracting material properties", "WARNING"))
+                self.after(0, lambda: self.extraction_status_var.set("No Cal Data"))
         else:
             self.after(0, lambda: self._log_debug(
                 f"Stopped during sweep 2 at {self.current_angle:.1f}\u00b0", "INFO"))

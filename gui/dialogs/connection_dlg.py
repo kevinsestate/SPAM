@@ -53,7 +53,8 @@ class ConnectionDialogMixin:
 
         row = section_label("Motor Controller", row)
         for lbl, key in [("MCU Address:", 'microcontroller_address'),
-                         ("ISR Pin:", 'isr_pin')]:
+                         ("ISR Pin:", 'isr_pin'),
+                         ("Servo GPIO Pin (BCM):", 'servo_gpio')]:
             v = tk.StringVar(value=self.connection_settings.get(key, ''))
             vars_[key] = v
             self._dialog_entry_row(content, lbl, v, row)

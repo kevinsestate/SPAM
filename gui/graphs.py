@@ -350,6 +350,23 @@ class GraphsMixin:
         else:
             self.sweep_progress_var.set("Idle")
 
+        # Cal data status
+        has_through = bool(getattr(self, 'cal_through', None))
+        has_reflect = bool(getattr(self, 'cal_reflect', None))
+        if has_through and has_reflect:
+            self.cal_status_var.set("\u2713 HH loaded")
+        elif has_through:
+            self.cal_status_var.set("\u26a0 Through only")
+        else:
+            self.cal_status_var.set("\u2717 None")
+
+        # Reset status dot to neutral when idle with no recent error
+        if not self.is_measuring:
+            last_type = getattr(self, '_last_status_type', None)
+            if last_type not in ('error', 'warning'):
+                self._status_dot.config(fg=self._t('success'))
+        self._last_status_type = None
+
         self.motor_position_var.set(f"{self.current_angle:.1f}\u00b0")
         self.freq_var.set(f"{self.frequency:.1f} GHz")
         self.power_var.set(f"{self.power_level:.1f} dBm")

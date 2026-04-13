@@ -16,7 +16,7 @@ class ConfigMixin:
             'adc_gain': '1', 'adc_data_rate': '96', 'adc_samples_per_point': '8',
             'enable_rf_switch': '0',
             'switch_gpio': '22',
-            'microcontroller_address': '0x55', 'isr_pin': '17',
+            'microcontroller_address': '0x55', 'isr_pin': '17', 'servo_gpio': '18',
             'extraction_f0_ghz': '24.0', 'extraction_d_mil': '60.0',
             'extraction_tensor_type': 'diagonal',
             'cal_d_m': '0.0', 'cal_d_sheet_m': '0.0',

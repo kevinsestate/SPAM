@@ -65,6 +65,7 @@ class DetailPanelMixin:
         self.permeability_var = tk.StringVar(value="--")
         self.polarization_var = tk.StringVar(value="0\u00b0")
         self.sweep_progress_var = tk.StringVar(value="Idle")
+        self.cal_status_var = tk.StringVar(value="\u2717 None")
         self.status_var = tk.StringVar(value="Ready")
         self.s11_var = tk.StringVar(value="0.000\u22200.0\u00b0")
         self.s12_var = tk.StringVar(value="0.000\u22200.0\u00b0")
@@ -85,6 +86,7 @@ class DetailPanelMixin:
             ("Angle", self.angle_var),
             ("Polarization", self.polarization_var),
             ("Sweep", self.sweep_progress_var),
+            ("Cal Data", self.cal_status_var),
             ("Status", self.status_var),
         ])
         section(inner, "Extracted Material", [

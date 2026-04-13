@@ -5,10 +5,11 @@ import json
 import csv
 import threading
 from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, filedialog
 
-from backend import CalibrationSweep
+from backend import CalibrationSweep, ExtractionResult
 
 
 class CallbacksMixin:
@@ -21,6 +22,7 @@ class CallbacksMixin:
         cmap = {"success": self._t('success'), "warning": self._t('warning'),
                 "error": self._t('error'), "info": self._t('accent')}
         self._status_dot.config(fg=cmap.get(status_type, self._t('success')))
+        self._last_status_type = status_type
 
     def _on_calibrate(self):
         if self.is_measuring:
@@ -185,22 +187,69 @@ class CallbacksMixin:
         if not ms:
             messagebox.showwarning("No Data", "Nothing to export.")
             return
+        # Chronological order (oldest first)
+        ms = list(reversed(ms))
         fp = filedialog.asksaveasfilename(defaultextension=".json",
             filetypes=[("JSON", "*.json"), ("CSV", "*.csv")])
         if not fp:
             return
         try:
+            # Latest extraction result
+            extraction = None
+            try:
+                extraction = (self.db.query(ExtractionResult)
+                              .order_by(ExtractionResult.timestamp.desc()).first())
+            except Exception:
+                pass
+
             if fp.endswith('.csv'):
                 with open(fp, 'w', newline='') as f:
                     w = csv.writer(f)
-                    w.writerow(['id','angle','permittivity','permeability','timestamp'])
+                    w.writerow(['id', 'angle', 'polarization',
+                                'transmitted_power_dB', 'reflected_power_dB',
+                                'transmitted_phase_deg', 'reflected_phase_deg',
+                                'permittivity', 'permeability', 'timestamp'])
                     for m in ms:
-                        w.writerow([m.id, m.angle, m.permittivity, m.permeability, m.timestamp.isoformat()])
+                        w.writerow([
+                            m.id, m.angle,
+                            getattr(m, 'polarization', 0.0) or 0.0,
+                            m.transmitted_power, m.reflected_power,
+                            m.transmitted_phase, m.reflected_phase,
+                            m.permittivity, m.permeability,
+                            m.timestamp.isoformat()
+                        ])
+                    if extraction:
+                        w.writerow([])
+                        w.writerow(['# Extraction Result'])
+                        w.writerow(['fit_error', 'tensor_type', 'f0_ghz', 'd_mil'])
+                        cfg = extraction.config_json or {}
+                        w.writerow([extraction.fit_error, extraction.tensor_type,
+                                    cfg.get('f0_ghz', ''), cfg.get('d_mil', '')])
             else:
-                data = [{"id": m.id, "angle": m.angle, "permittivity": m.permittivity,
-                         "permeability": m.permeability, "timestamp": m.timestamp.isoformat()} for m in ms]
+                data = [{
+                    "id": m.id,
+                    "angle": m.angle,
+                    "polarization": getattr(m, 'polarization', 0.0) or 0.0,
+                    "transmitted_power_dB": m.transmitted_power,
+                    "reflected_power_dB": m.reflected_power,
+                    "transmitted_phase_deg": m.transmitted_phase,
+                    "reflected_phase_deg": m.reflected_phase,
+                    "permittivity": m.permittivity,
+                    "permeability": m.permeability,
+                    "timestamp": m.timestamp.isoformat()
+                } for m in ms]
+                export = {"measurements": data}
+                if extraction:
+                    export["extraction"] = {
+                        "fit_error": extraction.fit_error,
+                        "tensor_type": extraction.tensor_type,
+                        "erv": extraction.erv_json,
+                        "mrv": extraction.mrv_json,
+                        "config": extraction.config_json,
+                        "timestamp": extraction.timestamp.isoformat()
+                    }
                 with open(fp, 'w') as f:
-                    json.dump(data, f, indent=2)
+                    json.dump(export, f, indent=2)
             self._update_status(f"Exported to {os.path.basename(fp)}", "success")
         except Exception as e:
             messagebox.showerror("Export Error", str(e))
@@ -215,7 +264,9 @@ class CallbacksMixin:
 
     def _on_help(self):
         messagebox.showinfo("About SPAM",
-            "SPAM - Scanner for Polarized Anisotropic Materials\nVersion 1.01\n\n"
+            "SPAM \u2014 Scanner for Polarized Anisotropic Materials\n"
+            "Version 2.0 \u2014 Expo Build\n\n"
+            "Dual-polarization (0\u00b0 + 90\u00b0) T-matrix material extraction at 24 GHz.\n\n"
             "Shortcuts: F11 Fullscreen, Ctrl+D Debug, Esc Exit fullscreen")
 
     def _on_debug_console(self):
@@ -228,8 +279,16 @@ class CallbacksMixin:
 
     def _log_debug(self, message: str, level: str = "INFO"):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.debug_log.append(f"[{ts}] [{level}] {message}")
+        line = f"[{ts}] [{level}] {message}"
+        self.debug_log.append(line)
         if len(self.debug_log) > 1000:
             self.debug_log = self.debug_log[-1000:]
         if self.debug_window and self.debug_window.winfo_exists():
             self.debug_window.update_console_log()
+        try:
+            log_path = Path.home() / "SPAM" / "spam_run.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as lf:
+                lf.write(line + "\n")
+        except Exception:
+            pass
