@@ -1,32 +1,27 @@
-# SPAM - Scanner for Polarized Anisotropic Materials
+# SPAM — Scanner for Polarized Anisotropic Materials
 
-A local desktop application for scanning and analyzing polarized anisotropic materials. Designed to run on Raspberry Pi and other local systems without requiring a web server.
+A local desktop application for scanning and extracting electromagnetic material tensors (ε, μ) from polarized RF measurements. Runs standalone on Raspberry Pi — no web server required.
 
 ## Features
 
-- **Real-time Measurements**: Live data visualization with automatic updates
-- **Data Management**: Store and retrieve measurement data using SQLite
-- **Calibration**: System calibration functionality
-- **Data Export**: Export measurements in JSON or CSV format
-- **Modern GUI**: Desktop interface built with Tkinter and Matplotlib
+- **Dual-polarization sweep**: Two full 0°–80° arm sweeps per run — horn at 0° (horizontal) then 90° (vertical) — servo-controlled automatically
+- **Real-time S-parameter display**: Live S₂₁/S₁₁ magnitude and phase at each angle
+- **T-matrix extraction**: Progressive inverse solver extracts diagonal ε/μ tensors from the full dual-pol S-matrix
+- **Calibrated measurements**: Through + Reflect calibration sweep stores per-angle reference voltages
+- **Live ADC oscilloscope**: Background I/Q stream at ~300 samp/s displayed in GUI
+- **Data export**: JSON and CSV with all S-param fields + extraction results appended
+- **Debug log**: All events written to `~/SPAM/spam_run.log` (survives crashes)
+- **Remote access**: VNC-capable (x11vnc on X11 session) for headless operation
 
-## Current Implementation Status
+## Current Implementation Status (2026-04-13)
 
-- **AD7193 on Raspberry Pi**: SPI bring-up is working (`ID=0xA2` and finite I/Q reads).
-- **GUI ADC-only flow**: Operational for measurement runs without motor/RF switch control.
-- **Motor dependency**: Optional for ADC bring-up; missing motor libs do not block ADC validation.
-- **Extraction boundary (important)**: Voltage-to-calibrated-S-parameter math is still pending teammate implementation.
-- **ADC output rate**: Configurable via **Data Rate (Hz)** in **Settings → Connection Setup** (also `adc_data_rate` in `spam_config.json`). Default `96` Hz is conservative; increase (e.g. `4800`) for faster conversions at the cost of noise / filter notches (see `hardware/ad7193.py` FS mapping).
-- **Measured I/Q pair rate**: With default `data_rate=96` and stream mode, **Python and C++** both achieve on the order of **~12 complete I/Q pairs per second** on a Pi 4 — the limit matches between languages, so the bottleneck is **ADC filter / two-channel sequencer / read pattern**, not Python alone. Raw SPI throughput is much higher (`scripts/pi/spi_ad7193_benchmark`).
-
-### What Is Provisional vs Final
-
-- **Final/validated now**
-  - AD7193 low-level SPI communication and channel reads.
-  - End-to-end GUI acquisition path using live ADC values.
-- **Provisional for now**
-  - Mapping ADC voltage I/Q directly into S-parameter values for extraction.
-  - Material extraction quality until calibrated voltage->S conversion is merged.
+- **AD7193 SPI**: Operational — `ID=0xA2`, finite I/Q at 4800 Hz data rate, 4 MHz SPI
+- **Motor control**: I2C polling of MCU status register (GPIO ISR not available on this kernel)
+- **Servo**: HPS-2518MG on GPIO 18 — calibrated 850 µs = 0° (H), 1800 µs = 90° (V); jitter-free (PWM released after each move)
+- **Dual-pol sweep**: Sweep 1 at horn 0°, servo rotates to 90°, Sweep 2 at horn 90°, returns home
+- **RF switch**: Code complete — enable in Settings → Connection Setup once switch is physically wired
+- **Calibration**: Through + Reflect sweep at pol-0 implemented; pol-90 cal deferred
+- **Extraction**: Fires automatically after dual sweep if calibration data is loaded; builds 4×4 S-matrix from paired pol-0/pol-90 measurements
 
 ## Tech Stack
 
@@ -71,12 +66,13 @@ SPAM/
 │   ├── database.py         # Database configuration
 │   └── models.py           # SQLAlchemy models
 ├── hardware/
-│   ├── ad7193.py           # AD7193 ADC driver
-│   └── rf_switch.py        # RF switch controller
+│   ├── ad7193.py           # AD7193 ADC driver (SPI)
+│   ├── rf_switch.py        # RF switch controller (GPIO)
+│   └── servo.py            # HPS-2518MG servo driver (pigpio/RPi.GPIO)
 ├── tests/
 │   ├── test_spam_calc.py   # T-matrix validation tests
 │   └── test_optimizer.py   # Extraction validation tests
-├── scripts/pi/             # Raspberry Pi ADC / SPI utilities (see below)
+├── scripts/pi/             # Raspberry Pi utilities (ADC, servo calibration)
 ├── Simulated Spam Calculations/
 │   ├── *.mat               # Simulated validation datasets
 │   └── *.m                 # MATLAB reference scripts
@@ -94,8 +90,9 @@ Build and run on the Pi (Linux only; requires SPI enabled and `g++` for C++ tool
 | Script / binary | Purpose |
 |-----------------|--------|
 | `check_adc_lowlevel.py` | Short I/Q sanity check; optional `--benchmark-raw`, `--binary-out`, `--result-json` |
-| `live_adc_view.py` | Live plot and/or benchmark; use `--data-rate`, `--spi-speed`, `--mode max-rate`, `--acq-mode stream`, `--benchmark-raw`, `--result-json` (do not pass literal `...` on the command line) |
+| `live_adc_view.py` | Live plot and/or benchmark; use `--data-rate`, `--spi-speed`, `--mode max-rate`, `--acq-mode stream`, `--benchmark-raw`, `--result-json` |
 | `adc_fast_capture.py` | Optional native fast path hook + Python fallback |
+| `servo_test.py` | **Interactive servo calibration** — `scan`, `sweep`, `min<us>`, `max<us>`, angle commands |
 | `spi_ad7193_benchmark.cpp` | Raw SPI throughput vs clock (not full ADC protocol) |
 | `ad7193_cpp_benchmark.cpp` | Full AD7193 driver in C++ + **pair/s** benchmark (compare to `live_adc_view.py`) |
 
@@ -277,40 +274,35 @@ g++ -O3 -std=c++17 ad7193_cpp_benchmark.cpp -o ad7193_cpp_benchmark
 
 ### Calibration Process
 
-Before taking measurements, you must calibrate the system:
+Before taking measurements, calibrate the system to convert raw ADC voltages to S-parameters:
 
-1. Click the **"Calibrate"** button in the sidebar
-2. **Step 1 - Empty Measurement:**
-   - Ensure NO material is in the measurement fixture
-   - Click **OK** to begin empty calibration
-   - Wait for calibration to complete (~2 seconds)
-3. **Step 2 - Material Placement:**
-   - Place your material sample in the measurement fixture
-   - Ensure it is properly positioned and secured
-   - Click **OK** to continue with material calibration
-   - Wait for calibration to complete (~2 seconds)
-4. Calibration complete! The system is now ready for measurements
+1. Click **"Calibrate"** in the sidebar
+2. **Step 1 — Through (empty fixture):**
+   - Remove ALL material from the fixture
+   - Click **OK** — arm sweeps 0°→80°, records per-angle transmitted voltage
+3. **Step 2 — Reflect (metal sheet):**
+   - Place a metal sheet in the fixture
+   - Click **OK** — arm sweeps again, records reflected voltage
+4. Calibration stored in DB — loaded automatically on next launch
+
+> **Note:** Set `cal_d_m` and `cal_d_sheet_m` in **Settings → Connection Setup** to your physical rig geometry (metres) for accurate phase correction. Default is 0.0 (phase correction disabled).
 
 ### Taking Measurements
 
 1. **Start a Measurement Session:**
    - Click **"Start Measurement"** in the sidebar
-   - The system will automatically sweep through angles from 0° to 90°
-   - Measurements are taken at each angle step (default: 5°)
-   - Data is saved to the database in real-time
+   - **Sweep 1**: arm sweeps 0°→80° at 5° steps with horn at 0° (horizontal)
+   - Servo automatically rotates horn to 90°
+   - **Sweep 2**: arm sweeps 0°→80° with horn at 90° (vertical)
+   - Servo returns horn to 0° and extraction fires automatically
+   - All data saved to DB in real-time
 
 2. **Monitor Progress:**
-   - Watch the real-time graphs in the center panel
-   - Check the right panel for current values:
-     - Current Angle
-     - Permittivity (ε)
-     - Permeability (μ)
-     - S-Parameters (S₁₁, S₁₂, S₂₁, S₂₂)
-   - View system status at the bottom
+   - Right panel shows: Angle, Polarization, Sweep progress (e.g. `Sweep 1/2 — 8/17 pts`), Cal Data status, live S₂₁/S₁₁
+   - Center graphs: S-parameter plots with pol-0 (blue) and pol-90 (orange) colour coding, live ADC oscilloscope
 
 3. **Stop Measurement:**
-   - Click **"Stop Measurement"** to halt the current session
-   - Data collected up to that point is saved
+   - Click **"Stop Measurement"** — motors return home, servo resets to 0°
 
 ### Viewing Results
 
@@ -337,10 +329,10 @@ Before taking measurements, you must calibrate the system:
 
 2. **Export Data:**
    - Click **"Export Data"** or use **File → Export Data**
-   - Choose file location and format:
-     - **JSON**: Structured data format
-     - **CSV**: Spreadsheet-compatible format
-   - All measurements will be exported
+   - Choose format:
+     - **JSON**: measurements array + extraction result block (ε tensor, μ tensor, fit error)
+     - **CSV**: one row per measurement point with all S-param fields; extraction result appended as footer
+   - Data exported in chronological order (angle 0 = row 1)
 
 ### Understanding the Interface
 
@@ -354,9 +346,12 @@ Before taking measurements, you must calibrate the system:
 - Non-Idealities & Compensation section (calibration error, noise, temperature, humidity)
 
 **Right Panel:**
-- Current measurement values
-- S-Parameter display (derived from signal measurements)
-- System status
+- Measurement section: Angle, Polarization, Sweep progress, Cal Data status, Status
+- Extracted Material: εr diagonal, μr diagonal, Fit Error
+- Motor: status and position
+- S-Parameters: live S₁₁, S₁₂, S₂₁, S₂₂
+- Extraction Config: status, thickness, tensor type
+- Parameters: frequency, power, angle step, interval
 
 **Status Bar (Bottom):**
 - Current system status
@@ -371,125 +366,63 @@ Before taking measurements, you must calibrate the system:
 
 ## Hardware Integration
 
-The project now includes live **AD7193 (Pmod AD5) SPI** integration on Raspberry Pi for bring-up and GUI measurement flow. (Older docs may mention I2C for a generic ADC; the shipped driver uses **`/dev/spidev*`**.) The remaining hardware-math integration task is calibrated voltage-to-S-parameter conversion for extraction quality.
-
 ### System Architecture
 
-The SPAM system uses a custom RF measurement setup with the following components:
+**RF Chain (24 GHz):**
+- **Gunn Diode Oscillator** → Amplifier → Splitter
+  - TX path → TX Horn Antenna (radiates into free space through sample)
+  - LO path → Mixer
+- **RX Horn Antennas**: Transmitted (RXT) and Reflected (RXp)
+- **SP2T RF Switch** (GPIO 22): selects TX or RX antenna path → Mixer input
+- **Mixer**: downconverts to IF — produces IF-I and IF-Q
+- **AD7193 (Pmod AD5)**: 24-bit SPI ADC reads IF-I and IF-Q at 4800 Hz
 
-**RF Chain:**
-- **Gunn Diode Oscillator**: Generates the RF signal
-- **Amplifier**: Boosts the RF signal power
-- **Splitter**: Divides signal into two paths:
-  - **TX Path**: Transmit signal to TX Horn Antenna (radiates RF into free space)
-  - **LO Path**: Local Oscillator signal to Mixer
-- **RX Horn Antennas**: Two receive antennas (RXp and RXT) receive reflected/transmitted RF
-- **Switch**: Selects between the two RX antennas
-- **Mixer**: Downconverts RF signal to baseband, producing:
-  - **IF-I** (In-phase component)
-  - **IF-Q** (Quadrature component)
-- **ADCs**: Convert analog IF-I and IF-Q signals to digital data
+**Control System (Raspberry Pi):**
+- **AD7193** via SPI (`/dev/spidev0.0`, 4 MHz)
+- **Motor controller MCU** via I2C (address `0x55`) — 2-axis arm + material rotation
+- **HPS-2518MG Servo** via GPIO 18 PWM (pigpio) — rotates horn antenna for polarization
+- **SP2T RF Switch** via GPIO 22 (optional, enable in settings)
 
-**Control System:**
-- **Raspberry Pi**: Central processing unit
-  - Reads I/Q data from ADCs via **I2C**
-  - Controls motors via **Microcontroller** (I2C)
-  - Receives encoder feedback for angle position
-- **Microcontroller**: Motor controller (I2C interface)
-  - Controls motor rotation
-  - Reads encoder position feedback
+### Connection Setup
 
-### I2C/ADC Integration
+All hardware parameters are in **Settings → Connection Setup**:
 
-The system reads two signals (IF-I and IF-Q) from ADCs connected via I2C to determine permittivity (ε) and permeability (μ).
+| Setting | Default | Notes |
+|---|---|---|
+| SPI Bus / CS | 0 / 0 | AD7193 on SPI0.0 |
+| SPI Speed | 4000000 | 4 MHz |
+| ADC Gain | 1 | Increase for weak signals |
+| Data Rate (Hz) | 4800 | Higher = faster, more noise |
+| Samples/Point | 8 | Averaged per angle |
+| Enable RF Switch | 0 | Set to 1 once switch is wired |
+| Switch GPIO Pin | 22 | BCM numbering |
+| Servo GPIO Pin | 18 | BCM numbering |
+| MCU Address | 0x55 | I2C motor controller |
+| ISR Pin | 17 | Motor position interrupt |
+| Coupler Sep. d (m) | 0.0 | **Measure and set for calibration** |
+| Ref Plane d_sheet (m) | 0.0 | **Measure and set for calibration** |
 
-1. **Configure Connection:**
-   - Go to **Settings → Connection Setup**
-   - Configure I2C bus number (typically 1 on Raspberry Pi)
-   - Set ADC I2C address (default: 0x48)
-   - Configure IF-I and IF-Q ADC channels
-   - Set sampling rate
-   - Configure microcontroller I2C address for motor control
-   - Save settings
+### Servo Calibration
 
-2. **Modify Measurement Worker:**
-   - Locate the `_measurement_worker` method in `GUI.py` (around line 760)
-   - Replace the simulated data generation with actual I/Q readings:
-   ```python
-   def _measurement_worker(self):
-       """Read IF-I and IF-Q from ADCs and convert to permittivity/permeability."""
-       import smbus
-       
-       # Initialize I2C bus
-       bus = smbus.SMBus(int(self.connection_settings['i2c_bus']))
-       adc_addr = int(self.connection_settings['adc_address'], 16)
-       
-       while self.is_measuring:
-           # Read IF-I and IF-Q from ADCs via I2C
-           if_i = read_adc_channel(bus, adc_addr, 
-                                   int(self.connection_settings['if_i_channel']))
-           if_q = read_adc_channel(bus, adc_addr, 
-                                   int(self.connection_settings['if_q_channel']))
-           
-           # Process I/Q signals to extract material properties
-           # This conversion depends on your specific RF measurement setup
-           permittivity, permeability = process_iq_signals(if_i, if_q, self.current_angle)
-           
-           # Optionally calculate S-parameters from I/Q for display
-           s11, s12, s21, s22 = iq_to_s_parameters(if_i, if_q)
-           
-           # Save to database
-           self._create_measurement(self.current_angle, permittivity, permeability)
-           
-           # Control motor to next angle (via microcontroller I2C)
-           set_motor_angle(bus, int(self.connection_settings['microcontroller_address'], 16), 
-                          self.current_angle + angle_step)
-           
-           # Wait for motor to reach position and stabilize
-           time.sleep(self.measurement_interval)
-   ```
+To recalibrate the horn servo (e.g. after mechanical adjustment):
 
-3. **I/Q to Material Properties Conversion:**
-   - Implement conversion algorithms based on your RF measurement setup
-   - The I/Q components represent the complex baseband signal
-   - Process I/Q to extract magnitude and phase information
-   - Apply calibration corrections and non-ideality compensation
-   - Convert to permittivity and permeability using your measurement model
-   - S-parameters can be derived from I/Q for display purposes
+```bash
+cd ~/SPAM
+python3 scripts/pi/servo_test.py
+```
 
-### Serial Device Integration
+Use `scan` to find physical stops, `min<us>` / `max<us>` to set endpoints, `sweep` to verify, `q` to print final values. Update `_PULSE_MIN_US` / `_PULSE_MAX_US` in `hardware/servo.py`.
 
-1. **Configure Serial Connection:**
-   - Go to **Settings → Connection Setup**
-   - Set serial port (e.g., COM1, /dev/ttyUSB0)
-   - Set baud rate and timeout
-   - Save settings
+### Remote Access (VNC)
 
-2. **Modify for Serial Communication:**
-   ```python
-   import serial
-   
-   def _measurement_worker(self):
-       ser = serial.Serial(
-           port=self.connection_settings['serial_port'],
-           baudrate=int(self.connection_settings['baud_rate']),
-           timeout=float(self.connection_settings['timeout'])
-       )
-       
-       while self.is_measuring:
-           # Read data from serial device
-           data = ser.readline().decode().strip()
-           # Parse and convert to permittivity/permeability
-           # Save to database
-   ```
+Enable x11vnc on the Pi (X11 session required — run `sudo raspi-config nonint do_wayland W1` first if on Wayland):
 
-### Key Integration Points
+```bash
+x11vnc -display :0 -nopw -forever -bg -noxdamage
+# Connects on port 5901
+```
 
-- **Connection Settings:** Stored in `self.connection_settings` dictionary
-- **Measurement Parameters:** Adjustable via Settings → Adjust Parameters
-- **S-Parameter Display:** Already implemented in the GUI
-- **Database:** Automatically handles all measurement storage
-- **Real-time Updates:** GUI updates automatically as data arrives
+Connect from Windows using RealVNC Viewer: `<pi-ip>:5901`
 
 ## Troubleshooting
 
