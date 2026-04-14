@@ -229,58 +229,12 @@ class AD7193:
         self._streaming = False
 
     def read_iq_stream(self, timeout_s=0.1, fast_path=True):
-        """Read I/Q using channel sequencer in continuous conversion mode."""
+        """Read I/Q using explicit single reads (more reliable than streaming)."""
         if self._sim:
             return self._sim_voltage(0), self._sim_voltage(1)
-        if not self._streaming:
-            self.start_iq_stream()
-
-        i_v = None
-        q_v = None
-        self._last_stream_chd = -1
-        deadline = time.monotonic() + max(0.01, float(timeout_s))
-        fast_deadline = deadline if not fast_path else (time.monotonic() + 0.6 * max(0.01, float(timeout_s)))
-
-        # Stage 1: aggressive fast path.
-        while fast_path and time.monotonic() < fast_deadline and (i_v is None or q_v is None):
-            # Poll status quickly to avoid stale reads while keeping overhead low.
-            if self._read_reg(_REG_STATUS, 1) & 0x80:
-                continue
-            d32 = self._read_reg(_REG_DATA, 4)  # D23..D0 + status (DAT_STA enabled)
-            raw = (d32 >> 8) & 0xFFFFFF
-            chd = d32 & 0x0F
-            if chd == self._last_stream_chd:
-                continue
-            self._last_stream_chd = chd
-            if chd == 0:
-                i_v = self._raw_to_voltage(raw)
-            elif chd == 1:
-                q_v = self._raw_to_voltage(raw)
-
-        # Stage 2: conservative fallback to avoid timeout on jittery systems.
-        while time.monotonic() < deadline and (i_v is None or q_v is None):
-            rem = max(0.001, deadline - time.monotonic())
-            if not self._wait_ready(timeout_s=min(0.05, rem), poll_sleep_s=0.00002):
-                continue
-            d32 = self._read_reg(_REG_DATA, 4)
-            raw = (d32 >> 8) & 0xFFFFFF
-            chd = d32 & 0x0F
-            self._last_stream_chd = chd
-            if chd == 0:
-                i_v = self._raw_to_voltage(raw)
-            elif chd == 1:
-                q_v = self._raw_to_voltage(raw)
-
-        if i_v is None or q_v is None:
-            self._stream_timeout_count += 1
-            if (self._stream_timeout_count % 25) == 1:
-                self._log("AD7193: stream timeout waiting for I/Q (using last valid sample)", "WARNING")
-            if i_v is None:
-                i_v = self._last_i_v
-            if q_v is None:
-                q_v = self._last_q_v
-            return self._apply_corrections(i_v, q_v)
-
+        # Use single conversions for reliability in pseudo-differential mode
+        i_v = self.read_channel(0)
+        q_v = self.read_channel(1)
         self._last_i_v = i_v
         self._last_q_v = q_v
         return self._apply_corrections(i_v, q_v)
