@@ -90,8 +90,8 @@ class AD7193:
         self._last_i_v = 0.0
         self._last_q_v = 0.0
         self._stream_timeout_count = 0
-        self._dc_i = 0.0
-        self._dc_q = 0.0
+        self._dc_i = 0.04750   # 47.50 mV measured quiescent offset
+        self._dc_q = 0.04891   # 48.91 mV measured quiescent offset
         self._deadband_v = 0.0
 
         if self._sim:
