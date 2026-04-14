@@ -406,6 +406,7 @@ class MeasurementMixin:
         if self.is_measuring:
             return
         self.is_measuring = True
+        self._stop_requested = False
         self._reset_adc_demo_series()
         self._start_adc_stream_thread()
         self.current_angle = 0.0
@@ -420,12 +421,18 @@ class MeasurementMixin:
     def _on_stop_measurement(self):
         if not self.is_measuring:
             return
+        self._stop_requested = True
         self.is_measuring = False
         self._stop_adc_stream_thread()
         self.status_var.set("Stopping...")
         self._update_status("Stopping...", "warning")
         self._update_button_states()
         self._log_debug(f"Stopped at {self.current_angle:.2f}\u00b0", "INFO")
+        # Wait for measurement worker to finish before homing
+        t = getattr(self, 'measurement_thread', None)
+        if t and t.is_alive():
+            t.join(timeout=5.0)
+        self._stop_requested = False
         self.after(500, lambda: self.status_var.set("Ready"))
         # Home motor back to start position after stop
         threading.Thread(target=self._home_worker, daemon=True).start()
