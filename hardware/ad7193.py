@@ -10,6 +10,7 @@ On non-Linux platforms, operates in simulation mode with synthetic data.
 import platform
 import math
 import time
+import threading
 
 _SIM_MODE = False
 try:
@@ -93,6 +94,7 @@ class AD7193:
         self._dc_i = 0.0  # run Tare ADC after wiring to set correct offset
         self._dc_q = 0.0  # run Tare ADC after wiring to set correct offset
         self._deadband_v = 0.0
+        self._spi_lock = threading.Lock()  # Protect SPI bus from concurrent access
 
         if self._sim:
             self._spi = None
@@ -116,21 +118,28 @@ class AD7193:
         """Reset the AD7193 by sending 40+ high bits."""
         if self._sim:
             return
-        self._spi.xfer2([0xFF] * 6)
+        with self._spi_lock:
+            self._spi.xfer2([0xFF] * 6)
         time.sleep(0.01)
 
     def _write_reg(self, reg, value, nbytes):
         """Write *nbytes* (1-3) to register *reg*."""
+        if self._sim:
+            return
         cmd = _COMM_WRITE | (reg << 3)
         data = [cmd]
         for i in range(nbytes - 1, -1, -1):
             data.append((value >> (8 * i)) & 0xFF)
-        self._spi.xfer2(data)
+        with self._spi_lock:
+            self._spi.xfer2(data)
 
     def _read_reg(self, reg, nbytes):
         """Read *nbytes* (1-3) from register *reg*."""
+        if self._sim:
+            return 0
         cmd = _COMM_READ | (reg << 3)
-        result = self._spi.xfer2([cmd] + [0x00] * nbytes)
+        with self._spi_lock:
+            result = self._spi.xfer2([cmd] + [0x00] * nbytes)
         value = 0
         for b in result[1:]:
             value = (value << 8) | b
