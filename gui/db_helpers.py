@@ -1,8 +1,11 @@
 """DBMixin: background init, CRUD helpers."""
 
+import threading
 from datetime import datetime
 
 from backend import SessionLocal, engine, Base, Measurement, Calibration
+
+_thread_local = threading.local()
 
 
 class DBMixin:
@@ -10,16 +13,12 @@ class DBMixin:
 
     @property
     def _safe_db(self):
-        """Return self.db, recreating the session if it has been closed."""
-        try:
-            self.db.execute("SELECT 1")
-        except Exception:
-            try:
-                self.db.close()
-            except Exception:
-                pass
-            self.db = SessionLocal()
-        return self.db
+        """Return a per-thread SQLAlchemy session, creating one if needed."""
+        sess = getattr(_thread_local, 'session', None)
+        if sess is None:
+            sess = SessionLocal()
+            _thread_local.session = sess
+        return sess
 
     def _initialize_background(self):
         try:
@@ -74,17 +73,18 @@ class DBMixin:
             self._last_graph_count = -1
             return m
         except Exception as e:
-            self.db.rollback()
+            self._safe_db.rollback()
             print(f"Error creating measurement: {e}")
             return None
 
     def _create_calibration(self, parameters=None):
         try:
             c = Calibration(timestamp=datetime.now(), parameters=parameters or {}, status="completed")
-            self.db.add(c)
-            self.db.commit()
-            self.db.refresh(c)
+            db = self._safe_db
+            db.add(c)
+            db.commit()
+            db.refresh(c)
             return c
         except Exception as e:
-            self.db.rollback()
+            self._safe_db.rollback()
             return None
