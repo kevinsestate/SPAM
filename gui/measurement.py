@@ -50,7 +50,8 @@ class MeasurementMixin:
 
     def _adc_live_update(self):
         """Update live ADC graph with a single reading (called by GUI timer)."""
-        if self.adc is None or self.adc.is_simulated:
+        # Don't read ADC during measurement - let measurement thread handle it
+        if self.is_measuring or self.adc is None or self.adc.is_simulated:
             return
         try:
             i_v, q_v = self.adc.read_iq_stream()

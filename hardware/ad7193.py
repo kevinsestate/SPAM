@@ -280,29 +280,22 @@ class AD7193:
         if self._sim:
             return self._sim_voltage(channel)
 
-        # Simple single conversion - no streaming complexity
+        # Ensure ADC is not in streaming mode before reconfiguring
+        if self._streaming:
+            self.stop_stream()
+            time.sleep(0.001)  # 1ms for ADC to settle after stopping stream
+
         config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
 
         # Start single conversion
         self._write_reg(_REG_MODE, self._mode_single_val, 3)
-        # Brief delay to let ADC start conversion (especially after config change)
-        time.sleep(0.0005)  # 500us settling
 
         # Wait for conversion (poll status register RDY bit)
-        if not self._wait_ready(timeout_s=0.5, poll_sleep_s=0.0002):
-            # Timeout - try to recover by checking status and resetting if needed
-            status = self._read_reg(_REG_STATUS, 1)
-            self._log(f"AD7193: timeout ch{channel} (status=0x{status:02X}), resetting...", "WARNING")
-            self._reset()
-            time.sleep(0.01)
-            # Reconfigure after reset
-            self._write_reg(_REG_CONFIG, config_val, 3)
-            self._write_reg(_REG_MODE, self._mode_single_val, 3)
-            # Try once more
-            if not self._wait_ready(timeout_s=0.3, poll_sleep_s=0.0002):
-                self._log(f"AD7193: still timeout after reset ch{channel}", "ERROR")
-                return 0.0
+        # Use 1ms poll interval - balances responsiveness with SPI bus load
+        if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.001):
+            self._log(f"AD7193: timeout reading ch{channel} (config=0x{config_val:06X})", "ERROR")
+            return 0.0
 
         # Read 24-bit data
         raw = self._read_reg(_REG_DATA, 3)
