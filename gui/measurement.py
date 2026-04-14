@@ -343,21 +343,11 @@ class MeasurementMixin:
             self.after(0, self._update_button_states)
             return
 
-        self.after(0, lambda: self._log_debug("Sweep 1/2 complete — returning arm home", "SUCCESS"))
+        self.after(0, lambda: self._log_debug("Sweep 1/2 complete — homing for sweep 2", "SUCCESS"))
 
-        # --- Return arm home ---
-        if not self._move_motor_and_wait(1, 0.0, "Arm-home"):
-            self.is_measuring = False
-            self.after(0, lambda: self._log_debug("Arm return failed — aborting", "ERROR"))
-            self.after(0, lambda: self.status_var.set("Ready"))
-            self.after(0, self._update_button_states)
-            return
-        if not self._move_motor_and_wait(2, 0.0, "Material-home"):
-            self.is_measuring = False
-            self.after(0, lambda: self._log_debug("Material return failed — aborting", "ERROR"))
-            self.after(0, lambda: self.status_var.set("Ready"))
-            self.after(0, self._update_button_states)
-            return
+        # --- Home both motors before sweep 2 ---
+        self._send_home_command()
+        self._wait_for_motor_position(timeout=15.0)
 
         # --- Rotate horn to 90 degrees (vertical polarization) ---
         self.after(0, lambda: self._log_debug("Rotating horn to 90\u00b0 (vertical pol)...", "INFO"))

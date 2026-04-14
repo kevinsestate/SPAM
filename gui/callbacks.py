@@ -79,6 +79,10 @@ class CallbacksMixin:
         self.after(0, lambda: self._log_debug(
             f"Through cal done: {len(angles)} angles", "SUCCESS"))
 
+        # Home before reflect sweep
+        self._send_home_command()
+        self._wait_for_motor_position(timeout=15.0)
+
         # Prompt for reflect step (must happen on main thread)
         self.after(0, self._cal_prompt_reflect)
 
@@ -120,6 +124,10 @@ class CallbacksMixin:
         # Store reflect reference
         self.cal_reflect = {a: complex(v[0], v[1]) for a, v in zip(angles, voltages)}
         self._save_cal_sweep("reflect", angles, voltages)
+
+        # Home after cal complete
+        self._send_home_command()
+        self._wait_for_motor_position(timeout=15.0)
 
         self._cal_running = False
         self.after(0, lambda: self._log_debug(
