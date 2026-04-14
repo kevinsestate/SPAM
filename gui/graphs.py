@@ -437,6 +437,9 @@ class GraphsMixin:
             self.noise_level = 0.0
         self.cal_error_var.set(f"{self.calibration_error:.2f}%")
         self.noise_var.set(f"{self.noise_level:.1f} dB")
+        # ADC live update (called periodically when streaming enabled)
+        if getattr(self, '_adc_stream_running', False):
+            self._adc_live_update()
         # Faster refresh during sweep, slower when idle
         interval = 500 if self.is_measuring else 2000
         self.after(interval, self._update_display)

@@ -48,67 +48,34 @@ class MeasurementMixin:
         else:
             self.adc_demo_sample_rate_hz = 0.0
 
-    def _adc_stream_worker(self):
-        """Background thread: continuously read ADC at ~20 Hz and feed demo buffers."""
-        while self._adc_stream_running:
-            if self.adc is None or self.adc.is_simulated:
-                time.sleep(0.1)
-                continue
-            try:
-                with self._adc_lock:
-                    i_v, q_v = self.adc.read_iq_stream()
-                tx_mag = math.sqrt(i_v**2 + q_v**2)
-                self._record_adc_demo_sample(tx_mag, tx_mag)
-                time.sleep(0.05)
-            except Exception:
-                time.sleep(0.05)
+    def _adc_live_update(self):
+        """Update live ADC graph with a single reading (called by GUI timer)."""
+        if self.adc is None or self.adc.is_simulated:
+            return
+        try:
+            i_v, q_v = self.adc.read_iq_stream()
+            tx_mag = math.sqrt(i_v**2 + q_v**2)
+            self._record_adc_demo_sample(tx_mag, tx_mag)
+        except Exception:
+            pass
 
     def _start_adc_stream_thread(self):
-        """Start the background ADC stream thread."""
-        if getattr(self, '_adc_stream_running', False):
-            return
+        """Start ADC live updates - now just sets flag for timer-based reads."""
         self._adc_stream_running = True
-        self._adc_stream_thread = threading.Thread(
-            target=self._adc_stream_worker, daemon=True)
-        self._adc_stream_thread.start()
 
     def _stop_adc_stream_thread(self):
-        """Stop the background ADC stream thread."""
+        """Stop ADC live updates."""
         self._adc_stream_running = False
-        t = getattr(self, '_adc_stream_thread', None)
-        if t is not None and t.is_alive():
-            t.join(timeout=1.0)
-        self._adc_stream_thread = None
 
     def _avg_stream_reads(self, n):
-        """Take n averaged reads, stopping background stream to avoid ADC conflicts."""
-        # Stop background stream thread completely during measurement
-        t = getattr(self, '_adc_stream_thread', None)
-        was_streaming = t is not None and t.is_alive()
-        if was_streaming:
-            self._adc_stream_running = False
-            t.join(timeout=0.5)  # wait for worker to exit
-            self.adc.stop_stream()
-            time.sleep(0.006)  # wait for ADC hardware to settle (5ms + margin)
-            self._log_debug(f"ADC: paused stream for measurement (n={n})", "DEBUG")
-        try:
-            i_sum = 0.0
-            q_sum = 0.0
-            for i in range(max(1, n)):
-                i_v, q_v = self.adc.read_iq_stream()
-                i_sum += i_v
-                q_sum += q_v
-                if i == 0:
-                    self._log_debug(f"ADC: I={i_v*1000:.1f}mV Q={q_v*1000:.1f}mV", "DEBUG")
-            return i_sum / max(1, n), q_sum / max(1, n)
-        finally:
-            # Restart background stream thread
-            self._adc_stream_running = True
-            self._adc_stream_thread = threading.Thread(
-                target=self._adc_stream_worker, daemon=True)
-            self._adc_stream_thread.start()
-            if was_streaming:
-                self._log_debug("ADC: restarted stream", "DEBUG")
+        """Take n averaged ADC reads for measurement."""
+        i_sum = 0.0
+        q_sum = 0.0
+        for _ in range(max(1, n)):
+            i_v, q_v = self.adc.read_iq_stream()
+            i_sum += i_v
+            q_sum += q_v
+        return i_sum / max(1, n), q_sum / max(1, n)
 
     def _take_raw_voltage(self):
         """Read raw complex voltages from ADC (no S-param conversion).
