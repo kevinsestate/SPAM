@@ -258,6 +258,11 @@ class AD7193:
         if self._sim:
             return self._sim_voltage(channel)
 
+        # CRITICAL: Stop any ongoing hardware streaming before reconfiguring
+        if self._streaming:
+            self.stop_stream()
+            time.sleep(0.002)  # 2ms for hardware to settle
+
         self._streaming = False
         config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
@@ -266,8 +271,9 @@ class AD7193:
         self._write_reg(_REG_MODE, self._mode_single_val, 3)
 
         # Wait for conversion (poll status register RDY bit)
-        if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.0001):
-            self._log(f"AD7193: timeout reading ch{channel}", "ERROR")
+        # Increased poll interval to reduce SPI contention
+        if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.001):
+            self._log(f"AD7193: timeout reading ch{channel} (config=0x{config_val:06X}, mode=0x{self._mode_single_val:06X})", "ERROR")
             return 0.0
 
         # Read 24-bit data
