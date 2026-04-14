@@ -229,43 +229,12 @@ class AD7193:
         self._streaming = False
 
     def read_iq_stream(self, timeout_s=0.1, fast_path=True):
-        """Read I/Q using fast streaming mode with status byte channel ID routing."""
+        """Read I/Q using single conversions for reliability in pseudo-differential mode."""
         if self._sim:
             return self._sim_voltage(0), self._sim_voltage(1)
-        if not self._streaming:
-            self.start_iq_stream()
-
-        i_v = None
-        q_v = None
-        deadline = time.monotonic() + max(0.01, float(timeout_s))
-
-        # Fast polling loop: read until we have both channels
-        while time.monotonic() < deadline and (i_v is None or q_v is None):
-            # Check if data ready (status bit 7)
-            if self._read_reg(_REG_STATUS, 1) & 0x80:
-                continue
-            # Read 4 bytes: 24-bit data + status byte (DAT_STA enabled)
-            d32 = self._read_reg(_REG_DATA, 4)
-            raw = (d32 >> 8) & 0xFFFFFF
-            chd = d32 & 0x0F  # channel ID from status byte
-
-            # Route to I or Q based on channel ID
-            # In pseudo-diff mode: ch0=AIN1, ch1=AIN2
-            if chd == 0:
-                i_v = self._raw_to_voltage(raw)
-            elif chd == 1:
-                q_v = self._raw_to_voltage(raw)
-
-        if i_v is None or q_v is None:
-            self._stream_timeout_count += 1
-            if (self._stream_timeout_count % 25) == 1:
-                self._log("AD7193: stream timeout waiting for I/Q (using last valid sample)", "WARNING")
-            if i_v is None:
-                i_v = self._last_i_v
-            if q_v is None:
-                q_v = self._last_q_v
-            return self._apply_corrections(i_v, q_v)
-
+        # Use single conversions for reliability - configure and read each channel
+        i_v = self.read_channel(0)
+        q_v = self.read_channel(1)
         self._last_i_v = i_v
         self._last_q_v = q_v
         return self._apply_corrections(i_v, q_v)
