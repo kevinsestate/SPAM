@@ -147,8 +147,8 @@ class HardwareMixin:
             message.insert(1, motor_num)
             msg_dec = ', '.join(str(b) for b in message)
             self._log_debug(f"I2C cmd: [{msg_dec}]", "INFO")
+            self.motor_movement_status = False  # reset before write to avoid ISR race
             self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
-            self.motor_movement_status = False
             self.motor_status_var.set("Moving...")
             self.motor_num = motor_num
             self.motor_command = command

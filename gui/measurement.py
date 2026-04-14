@@ -253,7 +253,7 @@ class MeasurementMixin:
             if not motor_success:
                 self.after(0, lambda: self._log_debug(f"{label} cmd fail at {position:.2f}\u00b0", "ERROR"))
                 return False
-            if not self._wait_for_motor_position(timeout=5.0):
+            if not self._wait_for_motor_position(timeout=15.0):
                 if self.motor_collision_detected:
                     self.after(0, lambda: self._log_debug("Collision - stopping", "ERROR"))
                     return False
