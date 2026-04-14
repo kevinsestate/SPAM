@@ -82,14 +82,23 @@ class MeasurementMixin:
 
     def _avg_stream_reads(self, n):
         """Take n stream reads and return averaged (i, q)."""
-        i_sum = 0.0
-        q_sum = 0.0
-        for _ in range(max(1, n)):
-            with self._adc_lock:
+        # Pause background stream to avoid ADC contention
+        was_streaming = self._adc_stream_running
+        if was_streaming:
+            self._adc_stream_running = False
+            time.sleep(0.02)  # let current stream read finish
+        try:
+            i_sum = 0.0
+            q_sum = 0.0
+            for _ in range(max(1, n)):
                 i_v, q_v = self.adc.read_iq_stream()
-            i_sum += i_v
-            q_sum += q_v
-        return i_sum / max(1, n), q_sum / max(1, n)
+                i_sum += i_v
+                q_sum += q_v
+            return i_sum / max(1, n), q_sum / max(1, n)
+        finally:
+            # Resume background stream
+            if was_streaming:
+                self._adc_stream_running = True
 
     def _take_raw_voltage(self):
         """Read raw complex voltages from ADC (no S-param conversion).
