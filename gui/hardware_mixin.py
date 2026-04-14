@@ -146,8 +146,6 @@ class HardwareMixin:
             msg_dec = ', '.join(str(b) for b in message)
             self._log_debug(f"I2C cmd: [{msg_dec}]", "INFO")
             self.motor_movement_status = False  # reset before write to avoid ISR race
-            if command != 3:
-                self._is_homed = False  # any real move invalidates homed state
             self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
             self.motor_status_var.set("Moving...")
             self.motor_num = motor_num
@@ -161,9 +159,6 @@ class HardwareMixin:
 
     def _send_home_command(self) -> bool:
         """Send homing sequence to MCU (command=3). motor_num and position are ignored by firmware."""
-        if getattr(self, '_is_homed', False):
-            self._log_debug("Already homed — skipping", "INFO")
-            return True
         self._log_debug("Sending home command (cmd=3)", "INFO")
         self.motor_status_var.set("Homing...")
         return self._send_motor_command(motor_num=0, position=0.0, command=3)

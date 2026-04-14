@@ -74,8 +74,6 @@ class DetailPanelMixin:
         self.s22_var = tk.StringVar(value="0.000\u22200.0\u00b0")
         self.system_status_var = tk.StringVar(value="Ready")
 
-        self.freq_var = tk.StringVar(value="10.0 GHz")
-        self.power_var = tk.StringVar(value="-10.0 dBm")
         self.angle_step_var = tk.StringVar(value="5.0\u00b0")
         self.interval_var = tk.StringVar(value="0.50 s")
         self.thickness_var = tk.StringVar(value=f"{self.extraction_d_mil:.1f} mil")
@@ -109,7 +107,6 @@ class DetailPanelMixin:
             ("Tensor Type", self.extract_type_var),
         ])
         section(inner, "Parameters", [
-            ("Frequency", self.freq_var), ("Power", self.power_var),
             ("Angle Step", self.angle_step_var), ("Interval", self.interval_var),
         ])
         section(inner, "Environment", [

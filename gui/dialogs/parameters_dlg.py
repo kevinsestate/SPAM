@@ -16,20 +16,15 @@ class ParametersDialogMixin:
         content = tk.Frame(d, bg=self._t('bg_panel'), padx=16, pady=16)
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
         content.columnconfigure(1, weight=1)
-        freq_v = tk.StringVar(value=str(self.frequency))
-        pow_v = tk.StringVar(value=str(self.power_level))
         step_v = tk.StringVar(value=str(self.angle_step))
         int_v = tk.StringVar(value=str(self.measurement_interval))
-        for i, (lbl, v) in enumerate([("Frequency (GHz):", freq_v), ("Power (dBm):", pow_v),
-                                       ("Angle Step (\u00b0):", step_v), ("Interval (s):", int_v)]):
+        for i, (lbl, v) in enumerate([("Angle Step (\u00b0):", step_v), ("Interval (s):", int_v)]):
             self._dialog_entry_row(content, lbl, v, i)
         def save():
             try:
-                self.frequency = float(freq_v.get())
-                self.power_level = float(pow_v.get())
                 self.angle_step = float(step_v.get())
                 self.measurement_interval = float(int_v.get())
-                self._log_debug(f"Params: f={self.frequency} P={self.power_level} step={self.angle_step} int={self.measurement_interval}", "INFO")
+                self._log_debug(f"Params: step={self.angle_step} int={self.measurement_interval}", "INFO")
                 self._update_status("Parameters updated", "success")
                 d.destroy()
             except ValueError as e:

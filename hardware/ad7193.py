@@ -90,8 +90,8 @@ class AD7193:
         self._last_i_v = 0.0
         self._last_q_v = 0.0
         self._stream_timeout_count = 0
-        self._dc_i = 0.04750   # 47.50 mV measured quiescent offset
-        self._dc_q = 0.04891   # 48.91 mV measured quiescent offset
+        self._dc_i = 0.0  # run Tare ADC after wiring to set correct offset
+        self._dc_q = 0.0  # run Tare ADC after wiring to set correct offset
         self._deadband_v = 0.0
 
         if self._sim:
@@ -193,7 +193,7 @@ class AD7193:
         self._streaming = False
         self._fs_val = self._fs_from_data_rate(data_rate)
         self._mode_single_val = _MODE_SINGLE | _MODE_CLK_INT | (self._fs_val & 0x3FF)
-        self._base_config = _CONFIG_REFSEL | _CONFIG_BUF | gain_bits
+        self._base_config = _CONFIG_REFSEL | _CONFIG_BUF | _CONFIG_PSEUDO | gain_bits
         self._config_by_channel = {
             0: self._base_config | _DIFF_CH[0],
             1: self._base_config | _DIFF_CH[1],

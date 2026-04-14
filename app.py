@@ -100,8 +100,6 @@ class SPAMGui(
         self.s21_mag = 0.0; self.s21_phase = 0.0
         self.s22_mag = 0.0; self.s22_phase = 0.0
 
-        self.frequency = 10.0
-        self.power_level = -10.0
         self.angle_step = 5.0
         self.measurement_interval = 0.5
         self.adc_samples_per_point = int(self.connection_settings.get('adc_samples_per_point', '8'))
@@ -126,7 +124,6 @@ class SPAMGui(
         self.motor_gpio = None
         self.motor_movement_status = True
         self.motor_collision_detected = False
-        self._is_homed = False
         self.motor_num = 1
         self.motor_command = 1
         self.motor_status_var = tk.StringVar(value="Not Initialized")

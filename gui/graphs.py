@@ -424,8 +424,6 @@ class GraphsMixin:
         self._last_status_type = None
 
         self.motor_position_var.set(f"{self.current_angle:.1f}\u00b0")
-        self.freq_var.set(f"{self.frequency:.1f} GHz")
-        self.power_var.set(f"{self.power_level:.1f} dBm")
         self.angle_step_var.set(f"{self.angle_step:.1f}\u00b0")
         self.interval_var.set(f"{self.measurement_interval:.2f} s")
         self.thickness_var.set(f"{self.extraction_d_mil:.1f} mil")
