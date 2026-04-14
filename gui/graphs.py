@@ -369,11 +369,7 @@ class GraphsMixin:
             else:
                 self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
                 self.ax4.set_ylim(0.0, 1000.0)
-            adc_title = (
-                f"ADC Live  "
-                f"(N={self.adc_demo_sample_count}, "
-                f"~{self.adc_demo_sample_rate_hz:.1f} samp/s)"
-            )
+            adc_title = "ADC Live"
             self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
             self._render_adc_live_readout()
         else:
