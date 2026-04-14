@@ -90,6 +90,9 @@ class AD7193:
         self._last_i_v = 0.0
         self._last_q_v = 0.0
         self._stream_timeout_count = 0
+        self._dc_i = 0.0
+        self._dc_q = 0.0
+        self._deadband_v = 0.0
 
         if self._sim:
             self._spi = None
@@ -276,11 +279,11 @@ class AD7193:
                 i_v = self._last_i_v
             if q_v is None:
                 q_v = self._last_q_v
-            return i_v, q_v
+            return self._apply_corrections(i_v, q_v)
 
         self._last_i_v = i_v
         self._last_q_v = q_v
-        return i_v, q_v
+        return self._apply_corrections(i_v, q_v)
 
     # ------------------------------------------------------------------
     # Reading
@@ -328,7 +331,79 @@ class AD7193:
         """
         i_v = self.read_channel(0)
         q_v = self.read_channel(1)
+        return self._apply_corrections(i_v, q_v)
+
+    # ------------------------------------------------------------------
+    # Signal conditioning
+    # ------------------------------------------------------------------
+    def _apply_corrections(self, i_v, q_v):
+        """Apply DC offset subtraction and deadband clamping."""
+        i_v -= self._dc_i
+        q_v -= self._dc_q
+        if self._deadband_v > 0.0:
+            if abs(i_v) < self._deadband_v:
+                i_v = 0.0
+            if abs(q_v) < self._deadband_v:
+                q_v = 0.0
         return i_v, q_v
+
+    def tare(self, n=64):
+        """Sample DC offset with n reads and store for subtraction on all future reads.
+
+        Call this when nothing is connected or before a measurement to zero out
+        the mixer quiescent bias.
+
+        Parameters
+        ----------
+        n : int
+            Number of samples to average (default 64).
+
+        Returns
+        -------
+        tuple of (float, float)
+            Measured (dc_i, dc_q) offset in volts.
+        """
+        if self._sim:
+            self._dc_i = 0.0
+            self._dc_q = 0.0
+            self._log("ADC tare (sim): offsets reset to 0", "INFO")
+            return 0.0, 0.0
+
+        # Temporarily clear offsets so we measure raw values
+        old_dc_i, old_dc_q = self._dc_i, self._dc_q
+        self._dc_i = 0.0
+        self._dc_q = 0.0
+
+        i_sum = 0.0
+        q_sum = 0.0
+        valid = 0
+        for _ in range(n):
+            try:
+                i_v, q_v = self.read_iq_stream(timeout_s=0.15)
+                i_sum += i_v
+                q_sum += q_v
+                valid += 1
+            except Exception:
+                pass
+
+        if valid == 0:
+            self._dc_i = old_dc_i
+            self._dc_q = old_dc_q
+            self._log("ADC tare failed: no valid samples", "ERROR")
+            return old_dc_i, old_dc_q
+
+        self._dc_i = i_sum / valid
+        self._dc_q = q_sum / valid
+        self._log(
+            f"ADC tare: dc_i={self._dc_i*1000:.2f}mV  dc_q={self._dc_q*1000:.2f}mV  (n={valid})",
+            "SUCCESS"
+        )
+        return self._dc_i, self._dc_q
+
+    def set_deadband(self, volts):
+        """Set noise-floor deadband in volts. Values |v| < volts are clamped to 0."""
+        self._deadband_v = max(0.0, float(volts))
+        self._log(f"ADC deadband set to {self._deadband_v*1000:.2f}mV", "INFO")
 
     # ------------------------------------------------------------------
     # Simulation

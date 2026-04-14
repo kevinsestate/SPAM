@@ -189,6 +189,53 @@ class DebugConsole(tk.Toplevel):
             lambda: threading.Thread(target=self.parent._home_worker, daemon=True).start(),
             "accent").grid(row=1, column=1, padx=2, pady=2, sticky="ew")
 
+        # ADC signal conditioning
+        adc_f = tk.LabelFrame(content, text="ADC Signal Conditioning", bg=self._t('bg_panel'),
+                              fg=self._t('text'), font=(_FONT, 9, "bold"), padx=12, pady=8)
+        adc_f.pack(fill=tk.X, pady=(0, 12))
+        adc_f.columnconfigure(0, weight=1); adc_f.columnconfigure(1, weight=1)
+
+        self._adc_dc_var = tk.StringVar(value="dc_i: --  dc_q: --")
+        tk.Label(adc_f, textvariable=self._adc_dc_var, bg=self._t('bg_panel'),
+                 fg=self._t('text_sec'), font=(_MONO, 8), anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+
+        def do_tare():
+            adc = getattr(self.parent, 'adc', None)
+            if adc is None:
+                self.parent._log_debug("No ADC connected", "WARNING")
+                return
+            self._adc_dc_var.set("Taring...")
+            def _worker():
+                dc_i, dc_q = adc.tare(n=64)
+                self.parent._log_debug(
+                    f"Tare done: dc_i={dc_i*1000:.2f}mV  dc_q={dc_q*1000:.2f}mV", "SUCCESS")
+                self.after(0, lambda: self._adc_dc_var.set(
+                    f"dc_i: {dc_i*1000:.2f}mV  dc_q: {dc_q*1000:.2f}mV"))
+            threading.Thread(target=_worker, daemon=True).start()
+
+        self.parent._make_btn(adc_f, "Tare ADC (zero offset)", do_tare, "accent").grid(
+            row=1, column=0, columnspan=2, padx=2, pady=(0, 6), sticky="ew")
+
+        # Deadband control
+        db_v = tk.StringVar(value="0")
+        tk.Label(adc_f, text="Deadband (mV):", bg=self._t('bg_panel'),
+                 fg=self._t('text_sec'), font=(_FONT, 9)).grid(row=2, column=0, sticky="w")
+        tk.Entry(adc_f, textvariable=db_v, bg=self._t('bg_input'), fg=self._t('text'),
+                 font=(_MONO, 9), width=8, relief=tk.FLAT).grid(row=2, column=1, sticky="w", padx=(4, 0))
+
+        def set_deadband():
+            adc = getattr(self.parent, 'adc', None)
+            if adc is None:
+                return
+            try:
+                adc.set_deadband(float(db_v.get()) / 1000.0)
+            except ValueError:
+                pass
+
+        self.parent._make_btn(adc_f, "Set Deadband", set_deadband, "ghost").grid(
+            row=3, column=0, columnspan=2, padx=2, pady=(4, 0), sticky="ew")
+
     def _schedule_refresh(self):
         if self.winfo_exists():
             self._update_measurement_log()

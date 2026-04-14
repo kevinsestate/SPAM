@@ -43,6 +43,8 @@ class GraphsMixin:
         rxv = self.adc_demo_rx_v if self.adc_demo_rx_v else []
         tx_mv = txv[-1] * 1000.0 if txv else 0.0
         rx_mv = rxv[-1] * 1000.0 if rxv else 0.0
+        if abs(tx_mv) < 1.0: tx_mv = 0.0
+        if abs(rx_mv) < 1.0: rx_mv = 0.0
         d_mv = tx_mv - rx_mv
         body = (
             f"TX  {tx_mv:7.1f} mV\n"
