@@ -81,12 +81,13 @@ class MeasurementMixin:
         self._adc_stream_thread = None
 
     def _avg_stream_reads(self, n):
-        """Take n stream reads and return averaged (i, q)."""
-        # Pause background stream to avoid ADC contention
-        was_streaming = self._adc_stream_running
-        if was_streaming:
+        """Take n averaged reads, stopping background stream to avoid ADC conflicts."""
+        # Stop background stream thread completely during measurement
+        t = getattr(self, '_adc_stream_thread', None)
+        if t is not None and t.is_alive():
             self._adc_stream_running = False
-            time.sleep(0.02)  # let current stream read finish
+            t.join(timeout=0.5)  # wait for worker to exit
+            self.adc.stop_stream()
         try:
             i_sum = 0.0
             q_sum = 0.0
@@ -96,9 +97,11 @@ class MeasurementMixin:
                 q_sum += q_v
             return i_sum / max(1, n), q_sum / max(1, n)
         finally:
-            # Resume background stream
-            if was_streaming:
-                self._adc_stream_running = True
+            # Restart background stream thread
+            self._adc_stream_running = True
+            self._adc_stream_thread = threading.Thread(
+                target=self._adc_stream_worker, daemon=True)
+            self._adc_stream_thread.start()
 
     def _take_raw_voltage(self):
         """Read raw complex voltages from ADC (no S-param conversion).
