@@ -277,11 +277,23 @@ class AD7193:
 
         # Start single conversion
         self._write_reg(_REG_MODE, self._mode_single_val, 3)
+        # Brief delay to let ADC start conversion (especially after config change)
+        time.sleep(0.0005)  # 500us settling
 
         # Wait for conversion (poll status register RDY bit)
         if not self._wait_ready(timeout_s=0.5, poll_sleep_s=0.0002):
-            self._log(f"AD7193: timeout ch{channel}", "WARNING")
-            return 0.0
+            # Timeout - try to recover by checking status and resetting if needed
+            status = self._read_reg(_REG_STATUS, 1)
+            self._log(f"AD7193: timeout ch{channel} (status=0x{status:02X}), resetting...", "WARNING")
+            self._reset()
+            time.sleep(0.01)
+            # Reconfigure after reset
+            self._write_reg(_REG_CONFIG, config_val, 3)
+            self._write_reg(_REG_MODE, self._mode_single_val, 3)
+            # Try once more
+            if not self._wait_ready(timeout_s=0.3, poll_sleep_s=0.0002):
+                self._log(f"AD7193: still timeout after reset ch{channel}", "ERROR")
+                return 0.0
 
         # Read 24-bit data
         raw = self._read_reg(_REG_DATA, 3)
