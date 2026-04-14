@@ -52,6 +52,8 @@ class HardwareMixin:
                 self.motor_control_enabled = True
                 self.motor_status_var.set("Ready")
                 self._log_debug("Motor control initialized", "SUCCESS")
+                import threading as _t
+                _t.Thread(target=self._home_worker, daemon=True).start()
             except ImportError as e:
                 self.motor_status_var.set("Libraries N/A")
                 self._log_debug(f"Motor libs missing: {e}", "ERROR")
