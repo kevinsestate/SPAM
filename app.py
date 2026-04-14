@@ -126,6 +126,7 @@ class SPAMGui(
         self.motor_gpio = None
         self.motor_movement_status = True
         self.motor_collision_detected = False
+        self._is_homed = False
         self.motor_num = 1
         self.motor_command = 1
         self.motor_status_var = tk.StringVar(value="Not Initialized")
