@@ -253,7 +253,7 @@ class MeasurementMixin:
             if not motor_success:
                 self.after(0, lambda: self._log_debug(f"{label} cmd fail at {position:.2f}\u00b0", "ERROR"))
                 return False
-            if not self._wait_for_motor_position(timeout=15.0):
+            if not self._wait_for_motor_position(timeout=5.0):
                 if self.motor_collision_detected:
                     self.after(0, lambda: self._log_debug("Collision - stopping", "ERROR"))
                     return False
@@ -278,7 +278,7 @@ class MeasurementMixin:
         material_step = 2.5
         max_arm_angle = 80.0
         arm_angle = 0.0
-        material_angle = 0.0
+        material_angle = 45.0
         label = f"Pol {pol_angle:.0f}\u00b0"
         is_pol90 = pol_angle >= 45.0
         pts = 0
