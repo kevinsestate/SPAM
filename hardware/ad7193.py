@@ -222,13 +222,23 @@ class AD7193:
         self._last_stream_chd = -1
 
     def stop_stream(self):
-        """Return ADC to idle mode from streaming mode."""
+        """Return ADC to idle mode from streaming mode with verification."""
         if self._sim:
             return
         # Write idle mode to stop continuous conversions
         idle_mode = _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF)
-        self._write_reg(_REG_MODE, idle_mode, 3)
-        time.sleep(0.005)  # 5ms for ADC to settle into idle
+        # Retry up to 3 times to ensure mode change takes effect
+        for attempt in range(3):
+            self._write_reg(_REG_MODE, idle_mode, 3)
+            time.sleep(0.002)  # wait for SPI transaction and ADC response
+            # Verify by reading mode register back
+            actual_mode = self._read_reg(_REG_MODE, 3)
+            if (actual_mode & 0x1F0000) == 0:  # MODE bits [20:16] = 0 = idle
+                self._streaming = False
+                return
+            time.sleep(0.001)
+        # If we get here, mode change failed - force flag anyway
+        self._log(f"AD7193: stop_stream failed to verify (mode=0x{actual_mode:06X})", "WARNING")
         self._streaming = False
 
     def read_iq_stream(self, timeout_s=0.1, fast_path=True):
@@ -261,18 +271,9 @@ class AD7193:
         if self._sim:
             return self._sim_voltage(channel)
 
-        # CRITICAL: Stop any ongoing hardware streaming before reconfiguring
+        # Ensure ADC is not in streaming mode before reconfiguring
         if self._streaming:
-            self.stop_stream()
-            time.sleep(0.005)  # 5ms for hardware to settle
-
-        # Double-check: if ADC still appears to be streaming, force it to idle
-        # This can happen if SPI writes are delayed or buffered
-        if self._streaming:
-            self._log(f"AD7193: forcing idle mode (ch{channel})", "WARNING")
-            self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
-            time.sleep(0.005)
-            self._streaming = False
+            self.stop_stream()  # This now verifies the mode change
         config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
 
