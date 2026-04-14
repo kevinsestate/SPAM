@@ -25,6 +25,7 @@ class SidebarMixin:
             ("\u2715", "Clear",           self._on_clear_measurements,"warn"),
         ]
         utility_icons = [
+            ("\u2302", "Home",            self._on_home,              "ghost"),
             ("\u2756", "Results",         self._on_view_results,      "ghost"),
             ("\u21a5", "Export",          self._on_export,            "ghost"),
             (">_",     "Debug",           self._on_debug_console,     "ghost"),

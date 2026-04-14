@@ -157,6 +157,12 @@ class HardwareMixin:
             self.motor_status_var.set("Error")
             return False
 
+    def _send_home_command(self) -> bool:
+        """Send homing sequence to MCU (command=3). motor_num and position are ignored by firmware."""
+        self._log_debug("Sending home command (cmd=3)", "INFO")
+        self.motor_status_var.set("Homing...")
+        return self._send_motor_command(motor_num=0, position=0.0, command=3)
+
     def _simulate_motor_complete(self):
         self.motor_movement_status = True
         self.motor_status_var.set("Ready (Sim)")

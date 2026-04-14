@@ -2,6 +2,7 @@
 
 import sys
 import platform
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -180,10 +181,13 @@ class DebugConsole(tk.Toplevel):
                            fg=self._t('text'), font=(_FONT, 9, "bold"), padx=12, pady=8)
         qf.pack(fill=tk.X, pady=(0, 12))
         qf.columnconfigure(0, weight=1); qf.columnconfigure(1, weight=1)
-        for i, (lbl, pos) in enumerate([("0\u00b0",0),("45\u00b0",45),("90\u00b0",90),("Home",0)]):
+        for i, (lbl, pos) in enumerate([("0\u00b0", 0), ("45\u00b0", 45), ("90\u00b0", 90)]):
             self.parent._make_btn(qf, lbl,
                 lambda p=pos: self.parent._send_motor_command(0, p, command=0),
                 "ghost").grid(row=i//2, column=i%2, padx=2, pady=2, sticky="ew")
+        self.parent._make_btn(qf, "Home \u2302",
+            lambda: threading.Thread(target=self.parent._home_worker, daemon=True).start(),
+            "accent").grid(row=1, column=1, padx=2, pady=2, sticky="ew")
 
     def _schedule_refresh(self):
         if self.winfo_exists():

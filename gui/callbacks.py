@@ -285,6 +285,18 @@ class CallbacksMixin:
             self.debug_window.lift()
             self.debug_window.focus()
 
+    def _on_home(self):
+        if not getattr(self, 'motor_control_enabled', False) and not True:
+            return
+        self._log_debug("Manual home requested", "INFO")
+        threading.Thread(target=self._home_worker, daemon=True).start()
+
+    def _home_worker(self):
+        self._send_home_command()
+        self._wait_for_motor_position(timeout=15.0)
+        self.after(0, lambda: self.motor_status_var.set("Ready"))
+        self.after(0, lambda: self._log_debug("Homing complete", "SUCCESS"))
+
     def _log_debug(self, message: str, level: str = "INFO"):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{ts}] [{level}] {message}"

@@ -408,6 +408,8 @@ class MeasurementMixin:
 
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
+        # Home motor back to 0 after sweep (in background, non-blocking)
+        threading.Thread(target=self._home_worker, daemon=True).start()
 
     def _on_start_measurement(self):
         if self.is_measuring:
@@ -433,6 +435,8 @@ class MeasurementMixin:
         self._update_button_states()
         self._log_debug(f"Stopped at {self.current_angle:.2f}\u00b0", "INFO")
         self.after(500, lambda: self.status_var.set("Ready"))
+        # Home motor back to start position after stop
+        threading.Thread(target=self._home_worker, daemon=True).start()
 
     def _on_clear_measurements(self):
         ms = self._get_measurements()
