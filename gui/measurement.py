@@ -428,12 +428,16 @@ class MeasurementMixin:
         self._update_status("Stopping...", "warning")
         self._update_button_states()
         self._log_debug(f"Stopped at {self.current_angle:.2f}\u00b0", "INFO")
-        # Wait for measurement worker to finish before homing
+        # Do cleanup and homing in background to avoid blocking GUI
+        threading.Thread(target=self._stop_cleanup_worker, daemon=True).start()
+
+    def _stop_cleanup_worker(self):
+        """Wait for measurement thread to finish, then home."""
         t = getattr(self, 'measurement_thread', None)
         if t and t.is_alive():
             t.join(timeout=5.0)
         self._stop_requested = False
-        self.after(500, lambda: self.status_var.set("Ready"))
+        self.after(0, lambda: self.status_var.set("Ready"))
         # Home motor back to start position after stop
         threading.Thread(target=self._home_worker, daemon=True).start()
 

@@ -261,6 +261,7 @@ class AD7193:
         self._streaming = False
         config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
+        time.sleep(0.001)  # 1ms settling after channel switch
 
         # Start single conversion
         self._write_reg(_REG_MODE, self._mode_single_val, 3)
