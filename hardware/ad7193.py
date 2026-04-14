@@ -225,7 +225,10 @@ class AD7193:
         """Return ADC to idle mode from streaming mode."""
         if self._sim:
             return
-        self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
+        # Write idle mode to stop continuous conversions
+        idle_mode = _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF)
+        self._write_reg(_REG_MODE, idle_mode, 3)
+        time.sleep(0.005)  # 5ms for ADC to settle into idle
         self._streaming = False
 
     def read_iq_stream(self, timeout_s=0.1, fast_path=True):
@@ -261,9 +264,15 @@ class AD7193:
         # CRITICAL: Stop any ongoing hardware streaming before reconfiguring
         if self._streaming:
             self.stop_stream()
-            time.sleep(0.002)  # 2ms for hardware to settle
+            time.sleep(0.005)  # 5ms for hardware to settle
 
-        self._streaming = False
+        # Double-check: if ADC still appears to be streaming, force it to idle
+        # This can happen if SPI writes are delayed or buffered
+        if self._streaming:
+            self._log(f"AD7193: forcing idle mode (ch{channel})", "WARNING")
+            self._write_reg(_REG_MODE, _MODE_IDLE | _MODE_CLK_INT | (self._fs_val & 0x3FF), 3)
+            time.sleep(0.005)
+            self._streaming = False
         config_val = self._config_by_channel.get(channel, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]))
         self._write_reg(_REG_CONFIG, config_val, 3)
 

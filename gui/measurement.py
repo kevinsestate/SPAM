@@ -89,6 +89,7 @@ class MeasurementMixin:
             self._adc_stream_running = False
             t.join(timeout=0.5)  # wait for worker to exit
             self.adc.stop_stream()
+            time.sleep(0.006)  # wait for ADC hardware to settle (5ms + margin)
             self._log_debug(f"ADC: paused stream for measurement (n={n})", "DEBUG")
         try:
             i_sum = 0.0
