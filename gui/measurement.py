@@ -373,6 +373,7 @@ class MeasurementMixin:
         self._send_servo_command(0.0, settle_s=2.0)
 
         self.is_measuring = False
+        self._stop_adc_stream_thread()
 
         # Reset motor display
         self.after(0, lambda: self.motor_position_var.set("0.0\u00b0"))
@@ -420,6 +421,7 @@ class MeasurementMixin:
         if not self.is_measuring:
             return
         self.is_measuring = False
+        self._stop_adc_stream_thread()
         self.status_var.set("Stopping...")
         self._update_status("Stopping...", "warning")
         self._update_button_states()

@@ -8,6 +8,19 @@ from backend import SessionLocal, engine, Base, Measurement, Calibration
 class DBMixin:
     """Provides database initialization and CRUD helper methods."""
 
+    @property
+    def _safe_db(self):
+        """Return self.db, recreating the session if it has been closed."""
+        try:
+            self.db.execute("SELECT 1")
+        except Exception:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = SessionLocal()
+        return self.db
+
     def _initialize_background(self):
         try:
             Base.metadata.create_all(bind=engine)
@@ -24,7 +37,7 @@ class DBMixin:
 
     def _get_measurements(self, limit=1000):
         try:
-            return self.db.query(Measurement).order_by(Measurement.timestamp.desc()).limit(limit).all()
+            return self._safe_db.query(Measurement).order_by(Measurement.timestamp.desc()).limit(limit).all()
         except Exception as e:
             print(f"Error retrieving measurements: {e}")
             return []
@@ -35,7 +48,7 @@ class DBMixin:
         Use this instead of _get_measurements() inside graph update paths to avoid fetching
         large result sets on every 500 ms redraw tick."""
         try:
-            rows = (self.db.query(Measurement)
+            rows = (self._safe_db.query(Measurement)
                     .order_by(Measurement.timestamp.desc())
                     .limit(100)
                     .all())
@@ -54,9 +67,10 @@ class DBMixin:
                             transmitted_phase=transmitted_phase, reflected_phase=reflected_phase,
                             polarization=polarization,
                             timestamp=datetime.now())
-            self.db.add(m)
-            self.db.commit()
-            self.db.refresh(m)
+            db = self._safe_db
+            db.add(m)
+            db.commit()
+            db.refresh(m)
             self._last_graph_count = -1
             return m
         except Exception as e:
