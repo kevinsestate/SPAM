@@ -44,13 +44,10 @@ class GraphsMixin:
         tx_mv = txv[-1] * 1000.0 if txv else 0.0
         rx_mv = rxv[-1] * 1000.0 if rxv else 0.0
         d_mv = tx_mv - rx_mv
-        n = self.adc_demo_sample_count
-        rate = self.adc_demo_sample_rate_hz
         body = (
             f"TX  {tx_mv:7.1f} mV\n"
             f"RX  {rx_mv:7.1f} mV\n"
-            f"\u0394   {d_mv:+7.1f} mV\n"
-            f"N={n}   {rate:.2f} samp/s"
+            f"\u0394   {d_mv:+7.1f} mV"
         )
         t = self.theme
         self.ax4.text(
