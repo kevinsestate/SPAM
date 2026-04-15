@@ -13,6 +13,8 @@ Press Ctrl+C to stop and print statistics.
 import sys
 import time
 import argparse
+import collections
+import threading
 
 sys.path.insert(0, '/home/dibr4426/Desktop/SPAM')
 
@@ -112,12 +114,17 @@ def main():
                         help="Sample and subtract floating-input DC bias")
     parser.add_argument("--spi-speed", type=int, default=4_000_000,
                         help="SPI clock Hz (default 4 MHz)")
+    parser.add_argument("--graph",     action="store_true",
+                        help="Open a live scrolling matplotlib plot")
+    parser.add_argument("--window",    type=int, default=200,
+                        help="Samples shown in graph window (default 200)")
     args = parser.parse_args()
 
     _header()
     print(f"  rate={_c(args.rate, _CYAN)} Hz   "
           f"gain={_c(args.gain, _CYAN)}   "
           f"tare={_c(args.tare, _CYAN)}   "
+          f"graph={_c(args.graph, _CYAN)}   "
           f"spi={_c(args.spi_speed//1_000_000, _CYAN)} MHz")
 
     try:
@@ -165,15 +172,71 @@ def main():
     i_vals, q_vals = [], []
     n = 0
     t0 = time.monotonic()
+    stop_event = threading.Event()
+
+    # ── Optional live graph ───────────────────────────────────────────────────
+    buf_i = buf_q = None
+    if args.graph:
+        import matplotlib
+        matplotlib.use("TkAgg")  # works over VNC; fall back to Agg silently
+        import matplotlib.pyplot as plt
+        import matplotlib.animation as animation
+
+        win   = args.window
+        buf_i = collections.deque([0.0] * win, maxlen=win)
+        buf_q = collections.deque([0.0] * win, maxlen=win)
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        fig.patch.set_facecolor("#0d0d0d")
+        ax.set_facecolor("#141414")
+        ax.tick_params(colors="#aaaaaa")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#333333")
+        ax.set_title("AD7193 Live — I (AIN1) & Q (AIN2)",
+                     color="#dddddd", fontsize=11, pad=10)
+        ax.set_xlabel("sample", color="#777777", fontsize=9)
+        ax.set_ylabel("mV",     color="#777777", fontsize=9)
+        ax.axhline(0, color="#444444", linewidth=0.8, linestyle="--")
+        line_i, = ax.plot(range(win), list(buf_i),
+                          color="#00e676", linewidth=1.2, label="I  (AIN1)")
+        line_q, = ax.plot(range(win), list(buf_q),
+                          color="#ffd740", linewidth=1.2, label="Q  (AIN2)")
+        ax.legend(facecolor="#1e1e1e", edgecolor="#444444",
+                  labelcolor="#cccccc", fontsize=9)
+        fig.tight_layout()
+
+        def _animate(_frame):
+            yi = list(buf_i)
+            yq = list(buf_q)
+            line_i.set_ydata(yi)
+            line_q.set_ydata(yq)
+            all_v = yi + yq
+            lo, hi = min(all_v), max(all_v)
+            pad = max(10.0, (hi - lo) * 0.15)
+            ax.set_ylim(lo - pad, hi + pad)
+            return line_i, line_q
+
+        ani = animation.FuncAnimation(
+            fig, _animate, interval=200, blit=True, cache_frame_data=False
+        )
+
+        def _graph_thread():
+            plt.show()
+            stop_event.set()  # closing the window also stops the read loop
+
+        threading.Thread(target=_graph_thread, daemon=True).start()
 
     try:
-        while True:
+        while not stop_event.is_set():
             i_v = adc.read_channel(0)
             q_v = adc.read_channel(1)
             n += 1
             i_mv, q_mv = i_v * 1000, q_v * 1000
             i_vals.append(i_mv)
             q_vals.append(q_mv)
+            if buf_i is not None:
+                buf_i.append(i_mv)
+                buf_q.append(q_mv)
             ts = _c(time.strftime("%H:%M:%S"), _DIM)
             print(
                 f"  {_c(f'{n:>5}', _DIM)}"
@@ -184,6 +247,8 @@ def main():
                 f"  [{_bar(q_mv)}]"
             )
     except KeyboardInterrupt:
+        pass
+    finally:
         elapsed = time.monotonic() - t0
         rate    = n / elapsed if elapsed > 0 else 0
         print()
