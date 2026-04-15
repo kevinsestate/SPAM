@@ -363,23 +363,41 @@ class AD7193:
                 q_v = 0.0
         return i_v, q_v
 
-    def warmup(self, n=8):
-        """Discard n dummy reads per channel to flush the sigma-delta filter.
+    def warmup(self, stability_mv=10.0, max_reads=200):
+        """Discard reads until the sigma-delta filter has settled.
 
-        The AD7193 sigma-delta filter takes several conversion cycles to settle
-        after a configuration change or reset.  Call this before the first real
-        measurement to avoid the full-scale startup spike.
+        Reads both channels repeatedly, discarding results, until two
+        consecutive reads on each channel differ by less than *stability_mv*.
+        This self-adapts to any FS value instead of using a fixed count.
 
         Parameters
         ----------
-        n : int
-            Number of samples to discard per channel (default 8).
+        stability_mv : float
+            Convergence threshold in millivolts (default 10.0 mV).
+        max_reads : int
+            Hard cap on discard reads to prevent hanging (default 200).
         """
         if self._sim:
             return
-        for _ in range(n):
-            self.read_channel(0)
-            self.read_channel(1)
+        threshold = stability_mv / 1000.0
+        prev_i = self.read_channel(0)
+        prev_q = self.read_channel(1)
+        for count in range(1, max_reads + 1):
+            curr_i = self.read_channel(0)
+            curr_q = self.read_channel(1)
+            if abs(curr_i - prev_i) < threshold and abs(curr_q - prev_q) < threshold:
+                self._log(
+                    f"AD7193: filter settled after {count * 2 + 2} warmup reads "
+                    f"(Δi={abs(curr_i - prev_i)*1000:.2f}mV "
+                    f"Δq={abs(curr_q - prev_q)*1000:.2f}mV)",
+                    "INFO",
+                )
+                return
+            prev_i, prev_q = curr_i, curr_q
+        self._log(
+            f"AD7193: warmup hit max_reads={max_reads} — proceeding anyway",
+            "WARNING",
+        )
 
     def tare(self, n=64):
         """Sample DC offset with n reads and store for subtraction on all future reads.
