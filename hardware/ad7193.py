@@ -320,7 +320,13 @@ class AD7193:
         # Use 1ms poll interval - balances responsiveness with SPI bus load
         if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.001):
             self._timeout_count = getattr(self, '_timeout_count', 0) + 1
-            self._log(f"AD7193: timeout #{self._timeout_count} reading ch{channel} (config=0x{config_val:06X})", "ERROR")
+            self._log(f"AD7193: timeout #{self._timeout_count} reading ch{channel} (config=0x{config_val:06X}) — resetting", "ERROR")
+            try:
+                self._reset()
+                self._write_reg(_REG_CONFIG, config_val, 3)
+                self._write_reg(_REG_MODE, self._mode_single_val, 3)
+            except Exception:
+                pass
             return 0.0
 
         # Read 24-bit data
@@ -363,40 +369,23 @@ class AD7193:
                 q_v = 0.0
         return i_v, q_v
 
-    def warmup(self, stability_mv=10.0, max_reads=200):
-        """Discard reads until the sigma-delta filter has settled.
+    def warmup(self):
+        """Flush the sigma-delta filter by discarding exactly FS reads per channel.
 
-        Reads both channels repeatedly, discarding results, until two
-        consecutive reads on each channel differ by less than *stability_mv*.
-        This self-adapts to any FS value instead of using a fixed count.
-
-        Parameters
-        ----------
-        stability_mv : float
-            Convergence threshold in millivolts (default 10.0 mV).
-        max_reads : int
-            Hard cap on discard reads to prevent hanging (default 200).
+        The AD7193 sinc³ filter has a pipeline depth equal to the FS register
+        value.  Discarding FS output samples per channel guarantees the
+        accumulator contains no energy from before the last configuration
+        change or reset.
         """
         if self._sim:
             return
-        threshold = stability_mv / 1000.0
-        prev_i = self.read_channel(0)
-        prev_q = self.read_channel(1)
-        for count in range(1, max_reads + 1):
-            curr_i = self.read_channel(0)
-            curr_q = self.read_channel(1)
-            if abs(curr_i - prev_i) < threshold and abs(curr_q - prev_q) < threshold:
-                self._log(
-                    f"AD7193: filter settled after {count * 2 + 2} warmup reads "
-                    f"(Δi={abs(curr_i - prev_i)*1000:.2f}mV "
-                    f"Δq={abs(curr_q - prev_q)*1000:.2f}mV)",
-                    "INFO",
-                )
-                return
-            prev_i, prev_q = curr_i, curr_q
+        n = self._fs_val
+        for _ in range(n):
+            self.read_channel(0)
+            self.read_channel(1)
         self._log(
-            f"AD7193: warmup hit max_reads={max_reads} — proceeding anyway",
-            "WARNING",
+            f"AD7193: warmup complete ({n * 2} reads discarded, FS={self._fs_val})",
+            "INFO",
         )
 
     def tare(self, n=64):
