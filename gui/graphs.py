@@ -28,14 +28,15 @@ class GraphsMixin:
         return [x * 1000.0 for x in v_list] if v_list else []
 
     def _adc_demo_ylim_mv(self, tx_mv, rx_mv):
-        """Baseline 0..1000 mV; expand upper bound when signal exceeds with padding."""
+        """Auto-scale Y axis for I/Q voltages (can be negative)."""
         all_mv = list(tx_mv) + list(rx_mv)
         if not all_mv:
-            return 0.0, 1000.0
+            return -100.0, 100.0
+        vmin = min(all_mv)
         vmax = max(all_mv)
-        pad = max(30.0, (vmax - min(all_mv)) * 0.12) if len(all_mv) > 1 else 40.0
-        y_high = max(1000.0, vmax + pad)
-        return 0.0, y_high
+        span = vmax - vmin
+        pad = max(20.0, span * 0.15)
+        return vmin - pad, vmax + pad
 
     def _render_adc_live_readout(self):
         """Bottom-left numeric readout (axes coordinates)."""
@@ -50,9 +51,9 @@ class GraphsMixin:
         sr = self.adc_demo_sample_rate_hz
         sr_str = f"{sr:.0f}" if sr > 0 else "--"
         body = (
-            f"TX  {tx_mv:7.1f} mV\n"
-            f"RX  {rx_mv:7.1f} mV\n"
-            f"\u0394   {d_mv:+7.1f} mV\n"
+            f"I(J5) {tx_mv:7.1f} mV\n"
+            f"Q(J6) {rx_mv:7.1f} mV\n"
+            f"\u0394     {d_mv:+7.1f} mV\n"
             f"N={n:4d}  {sr_str:>4s}samp/s"
         )
         t = self.theme
@@ -362,8 +363,8 @@ class GraphsMixin:
                 tt_p = tt[-n_pts:]
                 tx_p = tx_mv[-n_pts:]
                 rx_p = rx_mv[-n_pts:]
-                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=2.2, label='TX')
-                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=2.2, label='RX')
+                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=2.2, label='I (J5)')
+                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=2.2, label='Q (J6)')
                 self.ax4.legend(loc='upper right', fontsize=10, framealpha=0.7)
                 x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
                 self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
@@ -371,7 +372,7 @@ class GraphsMixin:
                 self.ax4.set_ylim(y0, y1)
             else:
                 self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
-                self.ax4.set_ylim(0.0, 1000.0)
+                self.ax4.set_ylim(-100.0, 100.0)
             adc_title = "ADC Live"
             self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
             self._render_adc_live_readout()

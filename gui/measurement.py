@@ -55,8 +55,7 @@ class MeasurementMixin:
             return
         try:
             i_v, q_v = self.adc.read_iq_stream()
-            tx_mag = math.sqrt(i_v**2 + q_v**2)
-            self._record_adc_demo_sample(tx_mag, tx_mag)
+            self._record_adc_demo_sample(i_v, q_v)
         except Exception:
             pass
 
