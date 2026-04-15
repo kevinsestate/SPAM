@@ -363,6 +363,24 @@ class AD7193:
                 q_v = 0.0
         return i_v, q_v
 
+    def warmup(self, n=8):
+        """Discard n dummy reads per channel to flush the sigma-delta filter.
+
+        The AD7193 sigma-delta filter takes several conversion cycles to settle
+        after a configuration change or reset.  Call this before the first real
+        measurement to avoid the full-scale startup spike.
+
+        Parameters
+        ----------
+        n : int
+            Number of samples to discard per channel (default 8).
+        """
+        if self._sim:
+            return
+        for _ in range(n):
+            self.read_channel(0)
+            self.read_channel(1)
+
     def tare(self, n=64):
         """Sample DC offset with n reads and store for subtraction on all future reads.
 

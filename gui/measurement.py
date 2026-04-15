@@ -105,11 +105,13 @@ class MeasurementMixin:
                 else:
                     i_rx, q_rx = self._avg_stream_reads(n)
             else:
+                # ADC-only mode: ch0 (I) = TX, ch1 (Q) = RX.
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
+                    i_rx, q_rx = i_tx, q_tx
                 else:
-                    i_tx, q_tx = self._avg_stream_reads(n)
-                i_rx, q_rx = i_tx, q_tx
+                    i_tx, i_rx = self._avg_stream_reads(n)
+                    q_tx, q_rx = 0.0, 0.0
 
             return complex(i_tx, q_tx), complex(i_rx, q_rx)
         else:
@@ -144,9 +146,8 @@ class MeasurementMixin:
                 else:
                     i_rx, q_rx = self._avg_stream_reads(n)
             else:
-                # ADC-only mode: single averaged read per point (no RF switch
-                # means both paths see the same physical channels; duplicating
-                # the pair for TX/RX keeps downstream math consistent).
+                # ADC-only mode: ch0 (I) = TX/transmitted detector,
+                # ch1 (Q) = RX/reflected detector.
                 if not self._adc_only_hint_logged:
                     self._adc_only_hint_logged = True
                     self.after(0, lambda: self._log_debug(
@@ -155,9 +156,10 @@ class MeasurementMixin:
                     ))
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
+                    i_rx, q_rx = i_tx, q_tx
                 else:
-                    i_tx, q_tx = self._avg_stream_reads(n)
-                i_rx, q_rx = i_tx, q_tx
+                    i_tx, i_rx = self._avg_stream_reads(n)
+                    q_tx, q_rx = 0.0, 0.0
 
             # --- Apply calibration if available, else raw-proxy fallback ---
             cal_t = getattr(self, 'cal_through', None)
@@ -315,6 +317,8 @@ class MeasurementMixin:
         self.after(0, lambda: self._log_debug("Sweep 1/2: horn at 0\u00b0", "INFO"))
         self.after(0, lambda: self._update_status("Sweep 1/2: horn 0\u00b0", "info"))
 
+        if self.adc is not None and not self.adc.is_simulated:
+            self.adc.warmup()
         completed = self._run_single_sweep(pol_angle=0.0)
 
         if not self.is_measuring or not completed:
@@ -347,6 +351,9 @@ class MeasurementMixin:
             self.after(0, lambda: self.status_var.set("Ready"))
             self.after(0, self._update_button_states)
             return
+
+        if self.adc is not None and not self.adc.is_simulated:
+            self.adc.warmup()
 
         # --- Polarization 1: sweep at horn 90 degrees ---
         self.after(0, lambda: self._log_debug("Sweep 2/2: horn at 90\u00b0", "INFO"))
