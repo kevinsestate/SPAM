@@ -3,7 +3,7 @@
   "spi_cs": "0",
   "spi_speed": "4000000",
   "adc_gain": "1",
-  "adc_data_rate": "4800",
+  "adc_data_rate": "96",
   "switch_gpio": "22",
   "microcontroller_address": "0x55",
   "isr_pin": "17",

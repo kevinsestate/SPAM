@@ -388,7 +388,8 @@ class GraphsMixin:
         if measurements:
             latest = measurements[-1]
             self.angle_var.set(f"{latest.angle:.1f}\u00b0")
-            self.current_angle = latest.angle
+            if not self.is_measuring:
+                self.current_angle = latest.angle
         else:
             self.angle_var.set("0.0\u00b0")
 

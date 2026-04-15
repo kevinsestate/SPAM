@@ -267,7 +267,7 @@ class AD7193:
             time.sleep(0.002)  # wait for SPI transaction and ADC response
             # Verify by reading mode register back
             actual_mode = self._read_reg(_REG_MODE, 3)
-            if (actual_mode & 0x1F0000) == 0:  # MODE bits [20:16] = 0 = idle
+            if (actual_mode >> 21) & 0x7 == 2:  # MD[2:0] = 010 = idle
                 self._streaming = False
                 return
             time.sleep(0.001)
