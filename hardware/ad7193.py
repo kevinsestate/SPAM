@@ -212,6 +212,31 @@ class AD7193:
         self._write_reg(_REG_MODE, self._mode_single_val, 3)
         self._write_reg(_REG_CONFIG, self._base_config, 3)
 
+        # --- Register readback verification ---
+        rb_config = self._read_reg(_REG_CONFIG, 3)
+        rb_mode = self._read_reg(_REG_MODE, 3)
+        rb_id = self._read_reg(_REG_ID, 1)
+        pseudo_ok = bool(rb_config & 0x040000)
+        buf_ok = bool(rb_config & 0x000010)
+        ch_bits = (rb_config >> 8) & 0x3FF
+        gain_rb = rb_config & 0x07
+        self._log(
+            f"AD7193 REG VERIFY: CONFIG=0x{rb_config:06X} "
+            f"(PSEUDO={'Y' if pseudo_ok else 'N'} BUF={'Y' if buf_ok else 'N'} "
+            f"CH_BITS=0x{ch_bits:03X} GAIN={gain_rb}) "
+            f"MODE=0x{rb_mode:06X} ID=0x{rb_id:02X}",
+            "INFO",
+        )
+        if rb_config != self._base_config:
+            self._log(
+                f"AD7193 CONFIG MISMATCH: wrote=0x{self._base_config:06X} "
+                f"read=0x{rb_config:06X}",
+                "WARNING",
+            )
+
+        self._read_count = 0  # reset per-channel read counter for diag logging
+        self._timeout_count = 0
+
         realized = (_MCLK_HZ / 1024.0) / self._fs_val
         self._log(
             f"AD7193 config: gain={gain}, FS={self._fs_val}, req_rate={data_rate}Hz "
@@ -294,12 +319,23 @@ class AD7193:
         # Wait for conversion (poll status register RDY bit)
         # Use 1ms poll interval - balances responsiveness with SPI bus load
         if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.001):
-            self._log(f"AD7193: timeout reading ch{channel} (config=0x{config_val:06X})", "ERROR")
+            self._timeout_count = getattr(self, '_timeout_count', 0) + 1
+            self._log(f"AD7193: timeout #{self._timeout_count} reading ch{channel} (config=0x{config_val:06X})", "ERROR")
             return 0.0
 
         # Read 24-bit data
         raw = self._read_reg(_REG_DATA, 3)
-        return self._raw_to_voltage(raw)
+        volts = self._raw_to_voltage(raw)
+
+        # Diagnostic logging: first 10 reads per configure(), then every 50th
+        self._read_count = getattr(self, '_read_count', 0) + 1
+        if self._read_count <= 10 or self._read_count % 50 == 0:
+            self._log(
+                f"AD7193 ch{channel}: raw=0x{raw:06X} ({raw}) -> {volts*1000:.2f}mV  "
+                f"[read #{self._read_count}]",
+                "DEBUG",
+            )
+        return volts
 
     def read_iq(self):
         """Read both I and Q differential channels.
