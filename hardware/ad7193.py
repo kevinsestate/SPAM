@@ -51,9 +51,9 @@ _CONFIG_BUF      = 0x000010  # Buffered mode
 # Gain settings
 _GAIN_MAP = {1: 0, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7}
 
-# Differential channel pairs on AD7193:
-# Ch0 = AIN1+ / AIN1-  (IF-I)
-# Ch1 = AIN2+ / AIN2-  (IF-Q)
+# Pseudo-differential channels on AD7193 (Pmod AD5 SMA wiring):
+# Ch0 = AIN1 / AINCOM  (IF-I, J5 SMA)
+# Ch1 = AIN2 / AINCOM  (IF-Q, J6 SMA)
 _DIFF_CH = {0: 0x0100, 1: 0x0200}
 
 # Reference voltage (Pmod AD5 uses external 2.5V reference)
