@@ -72,16 +72,20 @@ class ExtractionMixin:
                 s21_vv = _s_complex(m90, use_s21=True)  if m90 else s21_hh
                 s11_vv = _s_complex(m90, use_s21=False) if m90 else s11_hh
 
-                # 4x4 SPAM S-matrix: [hh, vv] x [hh, vv] blocks
-                # S = [[S11_hh, 0,      0,      0     ],
-                #      [0,      S11_vv, 0,      0     ],
-                #      [0,      0,      S21_hh, 0     ],
-                #      [0,      0,      0,      S21_vv]]
+                # 4x4 SPAM S-matrix — ports ordered [1h, 1v, 2h, 2v].
+                # S[i,j] = wave at port i due to excitation at port j.
+                # Blocks read by spam_s_to_tmatrix:
+                #   [0:2, 0:2] = S11 (port-1 reflection)
+                #   [2:4, 0:2] = S21 (1 -> 2 transmission)
+                #   [0:2, 2:4] = S12 (2 -> 1 transmission)
+                #   [2:4, 2:4] = S22 (port-2 reflection)
+                # Assume reciprocal, symmetric slab (no cross-pol measured):
+                #   S12 = S21,  S22 = S11.
                 s_matrices[i] = np.array([
-                    [s11_hh, 0,      0,      0     ],
-                    [0,      s11_vv, 0,      0     ],
-                    [0,      0,      s21_hh, 0     ],
-                    [0,      0,      0,      s21_vv],
+                    [s11_hh,  0,       s21_hh,  0     ],
+                    [0,       s11_vv,  0,       s21_vv],
+                    [s21_hh,  0,       s11_hh,  0     ],
+                    [0,       s21_vv,  0,       s11_vv],
                 ], dtype=complex)
 
             pol_pairs = sum(1 for k in angle_keys if k in pol0 and k in pol90)
