@@ -30,7 +30,14 @@ class HardwareMixin:
                 self.motor_gpio = GPIO
                 def handle_alert(channel):
                     try:
-                        st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                        lock = getattr(self, '_i2c_lock', None)
+                        if lock:
+                            lock.acquire()
+                        try:
+                            st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                        finally:
+                            if lock:
+                                lock.release()
                         if st & 0x01:
                             self.motor_collision_detected = True
                             self.after(0, lambda: self._log_debug("COLLISION DETECTED", "ERROR"))
@@ -38,8 +45,12 @@ class HardwareMixin:
                             if self.is_measuring:
                                 self.after(0, self._on_stop_measurement)
                         if st & 0x02:
-                            self.motor_movement_status = True
+                            self._motor_done_seq += 1
                             self.after(0, lambda: self.motor_status_var.set("Ready"))
+                    except OSError as e:
+                        self.after(0, lambda e=e: self._log_debug(f"Motor status error: {e}", "ERROR"))
+                        if e.errno in (5, 121):
+                            self.after(0, self._recover_i2c_bus)
                     except Exception as e:
                         self.after(0, lambda e=e: self._log_debug(f"Motor status error: {e}", "ERROR"))
                 try:
@@ -157,15 +168,29 @@ class HardwareMixin:
             message.insert(1, motor_num)
             msg_dec = ', '.join(str(b) for b in message)
             self._log_debug(f"I2C cmd: [{msg_dec}]", "INFO")
-            self.motor_movement_status = False  # reset before write to avoid ISR race
-            self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
+            self._motor_expect_seq = self._motor_done_seq + 1  # expect next ISR edge
+            lock = getattr(self, '_i2c_lock', None)
+            if lock:
+                lock.acquire()
+            try:
+                self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
+            finally:
+                if lock:
+                    lock.release()
             self.motor_status_var.set("Moving...")
             self.motor_num = motor_num
             self.motor_command = command
             self.motor_position_var.set(f"{position:.1f}\u00b0")
-            # 50ms settle after I2C write — prevents SPI glitch that causes ADC
-            # timeout immediately after motor commands during a sweep.
+            # 50ms settle then re-sync ADC SPI registers — I2C traffic can glitch
+            # the SPI bus and leave the ADC's state machine out of sync.
             time.sleep(0.05)
+            if self.adc is not None and not self.adc.is_simulated:
+                try:
+                    cfg = self.adc._config_by_channel.get(0, self.adc._base_config)
+                    self.adc._write_reg(0x02, cfg, 3)
+                    self.adc._write_reg(0x01, self.adc._mode_single_val, 3)
+                except Exception:
+                    pass
             return True
         except OSError as e:
             self._log_debug(f"Motor cmd error: {e}", "ERROR")
@@ -194,38 +219,53 @@ class HardwareMixin:
             return True
         use_poll = not getattr(self, 'motor_isr_available', True)
         if use_poll and self.motor_bus is not None:
-            # GPIO ISR unavailable — poll MCU status for bit 0x02
-            # (position reached) as defined in Arduino firmware.
-            # Phase 1: wait for bit 0x02 to CLEAR (MCU started moving).
-            # Phase 2: wait for bit 0x02 to SET   (motor arrived).
+            # GPIO ISR unavailable — poll MCU status register for bit 0x02.
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
+            lock = getattr(self, '_i2c_lock', None)
             start = time.time()
-            # Phase 1: wait up to 2s for 0x02 to clear (motor starts).
+            # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the move).
             while (time.time() - start) < 2.0:
                 try:
-                    st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    if lock:
+                        lock.acquire()
+                    try:
+                        st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    finally:
+                        if lock:
+                            lock.release()
                     if not (st & 0x02):
                         break
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Phase 2: wait for 0x02 to come back (motor arrived).
+            # Phase 2: wait for 0x02 to SET (motor reached position).
             while (time.time() - start) < timeout:
                 try:
-                    st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    if lock:
+                        lock.acquire()
+                    try:
+                        st = self.motor_bus.read_byte_data(mcu_address, 0x00)
+                    finally:
+                        if lock:
+                            lock.release()
                     if st & 0x02:
                         self.motor_movement_status = True
                         return True
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Timeout — assume motor reached position.
+            # Timeout — log and assume reached to keep sweep moving.
+            self._log_debug(f"Motor poll timeout ({timeout:.0f}s) — continuing", "WARNING")
             self.motor_movement_status = True
             return True
-        # ISR-based path: wait for callback to set motor_movement_status.
+        # ISR-based path: wait for _motor_done_seq to reach the expected value.
+        expect = getattr(self, '_motor_expect_seq', self._motor_done_seq + 1)
         start = time.time()
-        while not self.motor_movement_status and (time.time() - start) < timeout:
+        while self._motor_done_seq < expect and (time.time() - start) < timeout:
             if self.motor_collision_detected:
                 return False
             time.sleep(0.05)
-        return self.motor_movement_status
+        reached = self._motor_done_seq >= expect
+        if not reached:
+            self._log_debug(f"Motor ISR timeout ({timeout:.0f}s) — continuing", "WARNING")
+        return True  # always continue on timeout (caller logs WARNING)

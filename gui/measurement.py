@@ -251,6 +251,11 @@ class MeasurementMixin:
                 f"Pos: {a:.1f}\u00b0{pl} | S21: {tp:.1f}dBm {self.s21_phase:.1f}\u00b0 | "
                 f"S11: {rp:.1f}dBm {self.s11_phase:.1f}\u00b0", "INFO"))
 
+    # Per-motor wait timeouts (seconds). Arm moves 5° at a time and can be slow;
+    # material rotates a smaller angle so needs less time.
+    _ARM_MOVE_TIMEOUT_S = 15.0
+    _MATERIAL_MOVE_TIMEOUT_S = 10.0
+
     def _move_motor_and_wait(self, motor_num, position, label="Motor"):
         """Send a motor move command and wait for completion. Returns True on success."""
         if self.motor_control_enabled or platform.system() == 'Linux':
@@ -258,7 +263,8 @@ class MeasurementMixin:
             if not motor_success:
                 self.after(0, lambda: self._log_debug(f"{label} cmd fail at {position:.2f}\u00b0", "ERROR"))
                 return False
-            if not self._wait_for_motor_position(timeout=5.0):
+            t = self._ARM_MOVE_TIMEOUT_S if motor_num == 1 else self._MATERIAL_MOVE_TIMEOUT_S
+            if not self._wait_for_motor_position(timeout=t):
                 if self.motor_collision_detected:
                     self.after(0, lambda: self._log_debug("Collision - stopping", "ERROR"))
                     return False

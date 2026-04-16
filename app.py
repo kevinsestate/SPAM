@@ -126,6 +126,9 @@ class SPAMGui(
         self.motor_collision_detected = False
         self.motor_num = 1
         self.motor_command = 1
+        self._motor_done_seq = 0    # incremented by ISR on each move-complete edge
+        self._motor_expect_seq = 0  # set by _send_motor_command before each write
+        self._i2c_lock = threading.Lock()  # serialise all motor_bus access
         self.motor_status_var = tk.StringVar(value="Not Initialized")
         self.motor_position_var = tk.StringVar(value="0.0\u00b0")
 
