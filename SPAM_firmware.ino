@@ -68,8 +68,7 @@ bool mutHasReportedArrival = false;
 
 enum motors {
   ARM_MOTOR = 1,
-  MUT_MOTOR,
-  START_HOMING_SEQ
+  MUT_MOTOR
 };
 
 volatile long armEncoderPosition = 0;
@@ -103,7 +102,7 @@ long getMUTEncoderPosition() {
 enum commands {
   MOVE_MOTOR_ABS = 1,
   SET_HOME,
-  MOVE_MOTOR_REL,
+  START_HOMING_SEQ,
   HALT
 };
 
@@ -305,8 +304,7 @@ int commandHandler(){
 
       return SET_HOME;
     case START_HOMING_SEQ:
-      // Move arm to home switch first, then MUT
-      armHoming = true;
+      armHoming = true; // do NOT set mutHoming here — prevents premature MUT ISR trigger
       moveToPosition(GEAR_RATIO * -360, ARM_MOTOR);
       while(armHoming){
         updatePID();
@@ -459,12 +457,12 @@ void updatePID() {
 void moveToPosition(float degrees, int motorNum) {
     switch (motorNum){
       case ARM_MOTOR:
-        if(!armHoming && degrees > 80) degrees = 80; // clamp degrees, not the global position
+        if(!armHoming && degrees > 80) degrees = 80; // clamp degrees, not global position
         armTargetPositionCounts = (long)(degrees * (ARM_ENCODER_COUNTS / 360.0));
         armHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
       case MUT_MOTOR:
-        mutTargetPositionCounts = (long)(degrees * (MUT_ENCODER_COUNTS / 360.0));
+        mutTargetPositionCounts = (long)(degrees * (4000.0 / 360.0));
         mutHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
     }

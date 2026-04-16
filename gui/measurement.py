@@ -78,21 +78,31 @@ class MeasurementMixin:
         """
         n = max(1, n)
         if self.rf_switch is not None:
-            i_sum = 0.0
-            q_sum = 0.0
+            i_vals = []
+            q_vals = []
             for _ in range(n):
                 i_v, q_v = self.adc.read_iq_stream()
-                i_sum += i_v
-                q_sum += q_v
-            return i_sum / n, q_sum / n
+                if i_v != 0.0:
+                    i_vals.append(i_v)
+                if q_v != 0.0:
+                    q_vals.append(q_v)
+            i_avg = sum(i_vals) / len(i_vals) if i_vals else 0.0
+            q_avg = sum(q_vals) / len(q_vals) if q_vals else 0.0
+            return i_avg, q_avg
         else:
             # ADC-only: ch0 = I (AIN1/TX), ch1 = Q (AIN2/RX)
-            ch0_sum = 0.0
-            ch1_sum = 0.0
+            ch0_vals = []
+            ch1_vals = []
             for _ in range(n):
-                ch0_sum += self.adc.read_channel(0)
-                ch1_sum += self.adc.read_channel(1)
-            return ch0_sum / n, ch1_sum / n
+                v0 = self.adc.read_channel(0)
+                v1 = self.adc.read_channel(1)
+                if v0 != 0.0:
+                    ch0_vals.append(v0)
+                if v1 != 0.0:
+                    ch1_vals.append(v1)
+            ch0 = sum(ch0_vals) / len(ch0_vals) if ch0_vals else 0.0
+            ch1 = sum(ch1_vals) / len(ch1_vals) if ch1_vals else 0.0
+            return ch0, ch1
 
     def _take_raw_voltage(self):
         """Read raw complex voltages from ADC (no S-param conversion).
