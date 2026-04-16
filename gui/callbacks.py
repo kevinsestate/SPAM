@@ -53,6 +53,11 @@ class CallbacksMixin:
             a += step
         return angles
 
+    @staticmethod
+    def _cal_material_angle(arm_angle):
+        """Material motor position that matches arm_angle during a sweep."""
+        return 45.0 + (arm_angle / 5.0) * 2.5
+
     def _cal_through_worker(self):
         """Background: sweep Through calibration (no material)."""
         angles = self._cal_sweep_angles()
@@ -68,6 +73,7 @@ class CallbacksMixin:
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
+            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_tx.real, v_tx.imag])
             self.after(0, lambda a=angle, v=v_tx: self._log_debug(
@@ -116,6 +122,7 @@ class CallbacksMixin:
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
+            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_rx.real, v_rx.imag])
             self.after(0, lambda a=angle, v=v_rx: self._log_debug(
