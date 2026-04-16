@@ -24,6 +24,13 @@ import numpy as np
 
 from core.spam_calc import C0
 
+# Shared sweep geometry constants — import these in both calibration and
+# measurement sweep code to guarantee they stay in sync.
+ARM_STEP_DEG = 5.0        # arm motor step per measurement point (degrees)
+MATERIAL_STEP_DEG = 2.5   # material motor step per measurement point (degrees)
+MATERIAL_START_DEG = 45.0 # material motor starting angle (degrees)
+MAX_ARM_DEG = 80.0        # maximum arm sweep angle (degrees)
+
 
 def compute_k0(f_hz):
     """Return free-space wavenumber k₀ = 2π f / c₀  [rad/m]."""

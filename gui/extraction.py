@@ -144,8 +144,9 @@ class ExtractionMixin:
                                                     self.extraction_f0_ghz * 1e9,
                                                     mil_to_m(self.extraction_d_mil)
                                                 )})
-            self.db.add(rec)
-            self.db.commit()
+            db = self._safe_db
+            db.add(rec)
+            db.commit()
         except Exception as exc:
-            self.db.rollback()
+            self._safe_db.rollback()
             self._log_debug(f"Save extraction failed: {exc}", "ERROR")

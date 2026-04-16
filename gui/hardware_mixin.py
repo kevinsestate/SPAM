@@ -178,20 +178,13 @@ class HardwareMixin:
             finally:
                 if lock:
                     lock.release()
-            self.motor_status_var.set("Moving...")
+            self.after(0, lambda: self.motor_status_var.set("Moving..."))
             self.motor_num = motor_num
             self.motor_command = command
             self.motor_position_var.set(f"{position:.1f}\u00b0")
-            # 50ms settle then re-sync ADC SPI registers — I2C traffic can glitch
-            # the SPI bus and leave the ADC's state machine out of sync.
+            # 50ms settle — lets I2C transaction complete and SPI bus settle
+            # before next read_channel call (which reconfigures ADC cleanly itself).
             time.sleep(0.05)
-            if self.adc is not None and not self.adc.is_simulated:
-                try:
-                    cfg = self.adc._config_by_channel.get(0, self.adc._base_config)
-                    self.adc._write_reg(0x02, cfg, 3)
-                    self.adc._write_reg(0x01, self.adc._mode_single_val, 3)
-                except Exception:
-                    pass
             return True
         except OSError as e:
             self._log_debug(f"Motor cmd error: {e}", "ERROR")
@@ -226,6 +219,7 @@ class HardwareMixin:
             lock = getattr(self, '_i2c_lock', None)
             start = time.time()
             # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the command).
+            # Also break immediately if 0x02 is already SET — motor finished instantly.
             while (time.time() - start) < 2.0:
                 if self.motor_collision_detected:
                     return False
@@ -238,7 +232,10 @@ class HardwareMixin:
                         if lock:
                             lock.release()
                     if not (st & 0x02):
-                        break
+                        break  # bit cleared — MCU accepted and is moving
+                    if st & 0x02:
+                        self.motor_movement_status = True
+                        return True  # already done — fast move completed before first poll
                 except Exception:
                     pass
                 time.sleep(0.05)

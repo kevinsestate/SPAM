@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 
 from backend import CalibrationSweep, ExtractionResult
+from core.calibration import ARM_STEP_DEG, MATERIAL_STEP_DEG, MATERIAL_START_DEG, MAX_ARM_DEG
 
 
 class CallbacksMixin:
@@ -45,18 +46,17 @@ class CallbacksMixin:
 
     def _cal_sweep_angles(self):
         """Return the list of calibration sweep angles (matches measurement sweep)."""
-        step = 5.0
         angles = []
         a = 0.0
-        while a <= 80.0:
+        while a <= MAX_ARM_DEG:
             angles.append(a)
-            a += step
+            a += ARM_STEP_DEG
         return angles
 
     @staticmethod
     def _cal_material_angle(arm_angle):
         """Material motor position that matches arm_angle during a sweep."""
-        return 45.0 + (arm_angle / 5.0) * 2.5
+        return MATERIAL_START_DEG + (arm_angle / ARM_STEP_DEG) * MATERIAL_STEP_DEG
 
     def _cal_through_worker(self):
         """Background: sweep Through calibration (no material)."""
@@ -68,12 +68,12 @@ class CallbacksMixin:
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
             self.current_angle = angle
+            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
                 self.after(0, lambda: self._log_debug("Cal through: motor fail", "ERROR"))
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
-            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_tx.real, v_tx.imag])
             self.after(0, lambda a=angle, v=v_tx: self._log_debug(
@@ -117,12 +117,12 @@ class CallbacksMixin:
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
             self.current_angle = angle
+            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
                 self.after(0, lambda: self._log_debug("Cal reflect: motor fail", "ERROR"))
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
-            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_rx.real, v_rx.imag])
             self.after(0, lambda a=angle, v=v_rx: self._log_debug(
@@ -157,20 +157,22 @@ class CallbacksMixin:
                 geometry_json={"d": self.cal_d, "d_sheet": self.cal_d_sheet},
                 f0_ghz=self.extraction_f0_ghz,
             )
-            self.db.add(rec)
-            self.db.commit()
+            db = self._safe_db
+            db.add(rec)
+            db.commit()
             self._log_debug(f"Cal sweep '{sweep_type}' saved to DB", "INFO")
         except Exception as e:
-            self.db.rollback()
+            self._safe_db.rollback()
             self._log_debug(f"Cal sweep save failed: {e}", "ERROR")
 
     def _load_latest_calibration(self):
         """Load the most recent through + reflect sweeps from DB into memory."""
         try:
-            through = (self.db.query(CalibrationSweep)
+            db = self._safe_db
+            through = (db.query(CalibrationSweep)
                        .filter(CalibrationSweep.sweep_type == "through")
                        .order_by(CalibrationSweep.timestamp.desc()).first())
-            reflect = (self.db.query(CalibrationSweep)
+            reflect = (db.query(CalibrationSweep)
                        .filter(CalibrationSweep.sweep_type == "reflect")
                        .order_by(CalibrationSweep.timestamp.desc()).first())
             if through and through.angles_json and through.voltages_json:

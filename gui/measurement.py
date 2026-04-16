@@ -8,7 +8,8 @@ import tkinter as tk
 from tkinter import messagebox
 
 from backend import Measurement
-from core.calibration import compute_k0, compute_tau_m, compute_gamma_m, lookup_cal_voltage
+from core.calibration import (compute_k0, compute_tau_m, compute_gamma_m, lookup_cal_voltage,
+                              ARM_STEP_DEG, MATERIAL_STEP_DEG, MATERIAL_START_DEG, MAX_ARM_DEG)
 
 
 class MeasurementMixin:
@@ -285,11 +286,11 @@ class MeasurementMixin:
         bool
             True if sweep completed to 80 degrees, False if stopped early.
         """
-        arm_step = 5.0
-        material_step = 2.5
-        max_arm_angle = 80.0
+        arm_step = ARM_STEP_DEG
+        material_step = MATERIAL_STEP_DEG
+        max_arm_angle = MAX_ARM_DEG
         arm_angle = 0.0
-        material_angle = 45.0
+        material_angle = MATERIAL_START_DEG
         label = f"Pol {pol_angle:.0f}\u00b0"
         is_pol90 = pol_angle >= 45.0
         pts = 0
@@ -311,6 +312,12 @@ class MeasurementMixin:
             material_angle += material_step
             self.current_angle = arm_angle
 
+            # Move material first so it is in position before the arm swings to the new angle.
+            if not self._move_motor_and_wait(2, material_angle, "Material"):
+                if self.motor_collision_detected:
+                    self.is_measuring = False
+                    return False
+
             if not self._move_motor_and_wait(1, arm_angle, "Arm"):
                 if self.motor_collision_detected:
                     self.is_measuring = False
@@ -323,11 +330,6 @@ class MeasurementMixin:
                     return False
             else:
                 _consecutive_motor_fails = 0
-
-            if not self._move_motor_and_wait(2, material_angle, "Material"):
-                if self.motor_collision_detected:
-                    self.is_measuring = False
-                    return False
 
             reading = self._take_adc_reading()
             self._record_and_store(*reading)
