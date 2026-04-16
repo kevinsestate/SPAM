@@ -254,7 +254,7 @@ class MeasurementMixin:
     # Per-motor wait timeouts (seconds). Arm moves 5° at a time and can be slow;
     # material rotates a smaller angle so needs less time.
     _ARM_MOVE_TIMEOUT_S = 15.0
-    _MATERIAL_MOVE_TIMEOUT_S = 10.0
+    _MATERIAL_MOVE_TIMEOUT_S = 20.0
 
     def _move_motor_and_wait(self, motor_num, position, label="Motor"):
         """Send a motor move command and wait for completion. Returns True on success."""
