@@ -123,6 +123,8 @@ class DebugConsole(tk.Toplevel):
         footer.pack_propagate(False)
         self.parent._make_btn(footer, "Clear Log", self._clear_log, "ghost").pack(
             side=tk.LEFT, padx=(6, 0), pady=4)
+        self.parent._make_btn(footer, "Copy", self._copy_log, "ghost").pack(
+            side=tk.LEFT, padx=(4, 0), pady=4)
         tk.Checkbutton(
             footer, text="Auto-scroll", variable=self._autoscroll_var,
             bg=self._t('bg_elevated'), fg=self._t('text_sec'),
@@ -293,6 +295,12 @@ class DebugConsole(tk.Toplevel):
     def _clear_log(self):
         self.parent.debug_log.clear()
         self.update_console_log()
+
+    def _copy_log(self):
+        text = "\n".join(self.parent.debug_log)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
 
     def update_console_log(self):
         tw = self.console_text
