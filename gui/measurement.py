@@ -287,6 +287,8 @@ class MeasurementMixin:
         label = f"Pol {pol_angle:.0f}\u00b0"
         is_pol90 = pol_angle >= 45.0
         pts = 0
+        _consecutive_motor_fails = 0
+        _MAX_MOTOR_FAILS = 3
 
         self.current_angle = arm_angle
         self.current_polarization = pol_angle
@@ -307,6 +309,14 @@ class MeasurementMixin:
                 if self.motor_collision_detected:
                     self.is_measuring = False
                     return False
+                _consecutive_motor_fails += 1
+                if _consecutive_motor_fails >= _MAX_MOTOR_FAILS:
+                    self.after(0, lambda: self._log_debug(
+                        "Motor unresponsive (I2C failed 3x) — aborting sweep", "ERROR"))
+                    self.is_measuring = False
+                    return False
+            else:
+                _consecutive_motor_fails = 0
 
             if not self._move_motor_and_wait(2, material_angle, "Material"):
                 if self.motor_collision_detected:

@@ -318,13 +318,19 @@ class AD7193:
 
         # Wait for conversion (poll status register RDY bit)
         # Use 1ms poll interval - balances responsiveness with SPI bus load
-        if not self._wait_ready(timeout_s=1.0, poll_sleep_s=0.001):
+        if not self._wait_ready(timeout_s=2.0, poll_sleep_s=0.001):
             self._timeout_count = getattr(self, '_timeout_count', 0) + 1
             self._log(f"AD7193: timeout #{self._timeout_count} reading ch{channel} (config=0x{config_val:06X}) — resetting", "ERROR")
             try:
                 self._reset()
+                time.sleep(0.005)
                 self._write_reg(_REG_CONFIG, config_val, 3)
                 self._write_reg(_REG_MODE, self._mode_single_val, 3)
+                # Wait for recovery conversion and return it — prevents leaving
+                # ADC mid-conversion which cascades into the next timeout.
+                if self._wait_ready(timeout_s=2.0, poll_sleep_s=0.001):
+                    raw = self._read_reg(_REG_DATA, 3)
+                    return self._raw_to_voltage(raw)
             except Exception:
                 pass
             return 0.0
@@ -383,6 +389,13 @@ class AD7193:
         for _ in range(n):
             self.read_channel(0)
             self.read_channel(1)
+        # Hard-reset + reconfigure guarantees a clean single-conversion state
+        # regardless of whether the ADC was in continuous (stream) mode before.
+        self._reset()
+        time.sleep(0.005)
+        self._write_reg(_REG_CONFIG, self._config_by_channel[0], 3)
+        self._write_reg(_REG_MODE, self._mode_single_val, 3)
+        self._streaming = False
         self._log(
             f"AD7193: warmup complete ({n * 2} reads discarded, FS={self._fs_val})",
             "INFO",

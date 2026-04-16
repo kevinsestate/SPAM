@@ -129,6 +129,18 @@ class HardwareMixin:
             self._log_debug(f"Servo cmd error: {e}", "ERROR")
             return False
 
+    def _recover_i2c_bus(self):
+        """Close and reopen SMBus to clear a stuck I2C bus (EIO / EREMOTEIO)."""
+        try:
+            i2c_bus_num = int(self.connection_settings.get('i2c_bus', '1'))
+            self.motor_bus.close()
+            time.sleep(0.05)
+            from smbus import SMBus
+            self.motor_bus = SMBus(i2c_bus_num)
+            self._log_debug("I2C bus recovered (reopened)", "WARNING")
+        except Exception as e:
+            self._log_debug(f"I2C recovery failed: {e}", "ERROR")
+
     def _send_motor_command(self, motor_num: int, position: float, command: int = 1) -> bool:
         if not self.motor_control_enabled or self.motor_bus is None:
             self.motor_movement_status = False
@@ -151,7 +163,16 @@ class HardwareMixin:
             self.motor_num = motor_num
             self.motor_command = command
             self.motor_position_var.set(f"{position:.1f}\u00b0")
+            # 50ms settle after I2C write — prevents SPI glitch that causes ADC
+            # timeout immediately after motor commands during a sweep.
+            time.sleep(0.05)
             return True
+        except OSError as e:
+            self._log_debug(f"Motor cmd error: {e}", "ERROR")
+            self.motor_status_var.set("Error")
+            if e.errno in (5, 121):  # EIO / EREMOTEIO — bus stuck, try to recover
+                self._recover_i2c_bus()
+            return False
         except Exception as e:
             self._log_debug(f"Motor cmd error: {e}", "ERROR")
             self.motor_status_var.set("Error")
