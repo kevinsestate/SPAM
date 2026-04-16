@@ -169,6 +169,7 @@ class HardwareMixin:
             msg_dec = ', '.join(str(b) for b in message)
             self._log_debug(f"I2C cmd: [{msg_dec}]", "INFO")
             self._motor_expect_seq = self._motor_done_seq + 1  # expect next ISR edge
+            self.motor_collision_detected = False  # clear stale collision before each move
             lock = getattr(self, '_i2c_lock', None)
             if lock:
                 lock.acquire()
@@ -217,14 +218,17 @@ class HardwareMixin:
         if not self.motor_control_enabled:
             time.sleep(0.1)
             return True
-        use_poll = not getattr(self, 'motor_isr_available', True)
-        if use_poll and self.motor_bus is not None:
-            # GPIO ISR unavailable — poll MCU status register for bit 0x02.
+        if self.motor_bus is not None:
+            # Poll MCU status register for bit 0x02 (position reached).
+            # The MCU only pulses GPIO17 for homing, not for regular moves,
+            # so ISR-based waiting is unreliable for moves — always poll I2C.
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
             lock = getattr(self, '_i2c_lock', None)
             start = time.time()
-            # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the move).
+            # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the command).
             while (time.time() - start) < 2.0:
+                if self.motor_collision_detected:
+                    return False
                 try:
                     if lock:
                         lock.acquire()
@@ -240,6 +244,8 @@ class HardwareMixin:
                 time.sleep(0.05)
             # Phase 2: wait for 0x02 to SET (motor reached position).
             while (time.time() - start) < timeout:
+                if self.motor_collision_detected:
+                    return False
                 try:
                     if lock:
                         lock.acquire()
@@ -254,18 +260,10 @@ class HardwareMixin:
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Timeout — log and assume reached to keep sweep moving.
-            self._log_debug(f"Motor poll timeout ({timeout:.0f}s) — continuing", "WARNING")
+            # Timeout — assume reached so sweep continues.
+            self._log_debug(f"Motor timeout ({timeout:.0f}s) — continuing", "WARNING")
             self.motor_movement_status = True
             return True
-        # ISR-based path: wait for _motor_done_seq to reach the expected value.
-        expect = getattr(self, '_motor_expect_seq', self._motor_done_seq + 1)
-        start = time.time()
-        while self._motor_done_seq < expect and (time.time() - start) < timeout:
-            if self.motor_collision_detected:
-                return False
-            time.sleep(0.05)
-        reached = self._motor_done_seq >= expect
-        if not reached:
-            self._log_debug(f"Motor ISR timeout ({timeout:.0f}s) — continuing", "WARNING")
-        return True  # always continue on timeout (caller logs WARNING)
+        # No bus — simulation.
+        time.sleep(0.1)
+        return True
