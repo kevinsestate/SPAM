@@ -561,13 +561,13 @@ void loop() {
     }
 
 //POSITION REACHED LOGIC
-    if (!armHasReportedArrival && positionReached(5, ARM_MOTOR)) {
+    if (!armHasReportedArrival && positionReached(20, ARM_MOTOR)) {
         Serial.println("ARM POSITION REACHED");
         reportEvent(ARM_POS_REACHED);
         digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
         armHasReportedArrival = true;
     }
-    if (!mutHasReportedArrival && positionReached(5, MUT_MOTOR)) {
+    if (!mutHasReportedArrival && positionReached(20, MUT_MOTOR)) {
         Serial.println("MUT POSITION REACHED");
         reportEvent(MUT_POS_REACHED);
         digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
