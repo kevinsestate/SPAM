@@ -68,14 +68,30 @@ class MeasurementMixin:
         self._adc_stream_running = False
 
     def _avg_stream_reads(self, n):
-        """Take n averaged ADC reads for measurement."""
-        i_sum = 0.0
-        q_sum = 0.0
-        for _ in range(max(1, n)):
-            i_v, q_v = self.adc.read_iq_stream()
-            i_sum += i_v
-            q_sum += q_v
-        return i_sum / max(1, n), q_sum / max(1, n)
+        """Take n averaged ADC reads for measurement.
+
+        When the RF switch is active, read_iq_stream() is used (both channels
+        on the same switch position).  In ADC-only mode each call reads
+        channel 0 (I/AIN1) and channel 1 (Q/AIN2) directly so the assignment
+        is unambiguous regardless of how read_iq_stream is implemented.
+        """
+        n = max(1, n)
+        if self.rf_switch is not None:
+            i_sum = 0.0
+            q_sum = 0.0
+            for _ in range(n):
+                i_v, q_v = self.adc.read_iq_stream()
+                i_sum += i_v
+                q_sum += q_v
+            return i_sum / n, q_sum / n
+        else:
+            # ADC-only: ch0 = I (AIN1/TX), ch1 = Q (AIN2/RX)
+            ch0_sum = 0.0
+            ch1_sum = 0.0
+            for _ in range(n):
+                ch0_sum += self.adc.read_channel(0)
+                ch1_sum += self.adc.read_channel(1)
+            return ch0_sum / n, ch1_sum / n
 
     def _take_raw_voltage(self):
         """Read raw complex voltages from ADC (no S-param conversion).
@@ -105,7 +121,7 @@ class MeasurementMixin:
                 else:
                     i_rx, q_rx = self._avg_stream_reads(n)
             else:
-                # ADC-only mode: ch0 (I) = TX, ch1 (Q) = RX.
+                # ADC-only mode: ch0 (I/AIN1) = TX, ch1 (Q/AIN2) = RX.
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
                     i_rx, q_rx = i_tx, q_tx
@@ -162,6 +178,7 @@ class MeasurementMixin:
                     q_tx, q_rx = 0.0, 0.0
 
             # --- Apply calibration if available, else raw-proxy fallback ---
+
             cal_t = getattr(self, 'cal_through', None)
             cal_r = getattr(self, 'cal_reflect', None)
             if cal_t and cal_r:
@@ -393,17 +410,33 @@ class MeasurementMixin:
         self.after(0, lambda: self.status_var.set("Ready"))
         self.after(0, self._update_button_states)
         # Home motor back to 0 after sweep (in background, non-blocking)
-        threading.Thread(target=self._home_worker, daemon=True).start()
+        if not getattr(self, '_homing', False):
+            threading.Thread(target=self._home_worker, daemon=True).start()
 
     def _on_start_measurement(self):
         if self.is_measuring:
             return
+        if getattr(self, '_homing', False):
+            self._log_debug("Start blocked: arm is still homing", "WARNING")
+            self._update_status("Wait — arm homing", "warning")
+            return
+        # Clear measurements from previous session before each new run
+        try:
+            from backend import Measurement as _Meas
+            self.db.query(_Meas).delete()
+            self.db.commit()
+            self._last_graph_count = -1
+            self._log_debug("Previous measurements cleared", "INFO")
+        except Exception as _e:
+            self.db.rollback()
+            self._log_debug(f"Clear measurements failed: {_e}", "WARNING")
         self.is_measuring = True
         self._stop_requested = False
         self._reset_adc_demo_series()
         self._start_adc_stream_thread()
         self.current_angle = 0.0
         self._cal_missing_warned = False
+        self._adc_only_hint_logged = False
         self.status_var.set("Measuring...")
         self._update_status("Sweeping 0\u00b0 to 80\u00b0", "info")
         self._update_button_states()
@@ -431,8 +464,9 @@ class MeasurementMixin:
             t.join(timeout=5.0)
         self._stop_requested = False
         self.after(0, lambda: self.status_var.set("Ready"))
-        # Home motor back to start position after stop
-        threading.Thread(target=self._home_worker, daemon=True).start()
+        # Only home if we were actually measuring (not if home already running)
+        if not getattr(self, '_homing', False):
+            threading.Thread(target=self._home_worker, daemon=True).start()
 
     def _on_clear_measurements(self):
         ms = self._get_measurements()

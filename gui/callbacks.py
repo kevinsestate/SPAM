@@ -184,6 +184,7 @@ class CallbacksMixin:
     def _update_button_states(self):
         if hasattr(self, 'start_container') and hasattr(self, 'stop_container') and hasattr(self, 'clear_container'):
             sidebar_bg = self._t('bg_sidebar')
+            homing = getattr(self, '_homing', False)
             if self.is_measuring:
                 self.start_container.pack_forget()
                 self.stop_container.pack(fill=tk.X, padx=6, pady=3, before=self.clear_container)
@@ -193,9 +194,9 @@ class CallbacksMixin:
                 self.stop_container.pack_forget()
                 self.start_container.pack(fill=tk.X, padx=6, pady=3, before=self.clear_container)
                 btn = self.start_button
-                real_bg = self._t('success')
+                real_bg = self._t('success') if not homing else self._t('warning')
             if btn:
-                btn.config(bg=sidebar_bg)
+                btn.config(bg=sidebar_bg, state=tk.NORMAL if not homing or self.is_measuring else tk.DISABLED)
                 self.after(120, lambda b=btn, c=real_bg: b.config(bg=c))
 
     def _on_export(self):
@@ -300,10 +301,16 @@ class CallbacksMixin:
         threading.Thread(target=self._home_worker, daemon=True).start()
 
     def _home_worker(self):
-        if self._send_home_command():
-            self._wait_for_motor_position(timeout=15.0)
-            self.after(0, lambda: self.motor_status_var.set("Ready"))
-            self.after(0, lambda: self._log_debug("Homing complete", "SUCCESS"))
+        self._homing = True
+        self.after(0, self._update_button_states)
+        try:
+            if self._send_home_command():
+                self._wait_for_motor_position(timeout=15.0)
+                self.after(0, lambda: self.motor_status_var.set("Ready"))
+                self.after(0, lambda: self._log_debug("Homing complete", "SUCCESS"))
+        finally:
+            self._homing = False
+            self.after(0, self._update_button_states)
 
     def _log_debug(self, message: str, level: str = "INFO"):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
