@@ -149,7 +149,7 @@ class MeasurementMixin:
             return v_tx, v_rx
 
     def _take_adc_reading(self):
-        """Take a single ADC reading and return (transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag)."""
+        """Take a single ADC reading and return (transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag, raw_tx_v, raw_rx_v)."""
         n = getattr(self, 'adc_samples_per_point', 1)
         if self.adc is not None:
             # --- Real ADC reads ---
@@ -233,16 +233,18 @@ class MeasurementMixin:
             reflected_phase = -45.0 + 135.0 * (self.current_angle / 80.0)
             s21_mag = 10 ** (transmitted_power / 20.0)
             s11_mag = 10 ** (reflected_power / 20.0)
+            i_tx = s21_mag
+            i_rx = s11_mag
 
-        return transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag
+        return transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag, i_tx, i_rx
 
-    def _record_and_store(self, transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag):
+    def _record_and_store(self, transmitted_power, reflected_power, transmitted_phase, reflected_phase, s21_mag, s11_mag, raw_tx_v=0.0, raw_rx_v=0.0):
         """Record ADC sample, store measurement, update live S-param display vars."""
         self.transmitted_power = transmitted_power
         self.reflected_power = reflected_power
         self.transmitted_phase = transmitted_phase
         self.reflected_phase = reflected_phase
-        self._record_adc_demo_sample(s21_mag, s11_mag)
+        self._record_adc_demo_sample(raw_tx_v, raw_rx_v)
 
         pol = getattr(self, 'current_polarization', 0.0)
         self._create_measurement(self.current_angle, 0.0, 0.0,
