@@ -331,6 +331,8 @@ class MeasurementMixin:
             else:
                 _consecutive_motor_fails = 0
 
+            # Let SPI bus settle after I2C motor traffic before reading ADC
+            time.sleep(0.15)
             reading = self._take_adc_reading()
             self._record_and_store(*reading)
             pts += 1
