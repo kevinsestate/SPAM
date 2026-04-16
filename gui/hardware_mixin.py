@@ -257,10 +257,11 @@ class HardwareMixin:
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Timeout — assume reached so sweep continues.
-            self._log_debug(f"Motor timeout ({timeout:.0f}s) — continuing", "WARNING")
-            self.motor_movement_status = True
-            return True
+            # Timeout — motor never confirmed position. Report failure so
+            # callers can abort or count strikes; do NOT pretend success.
+            self._log_debug(f"Motor timeout ({timeout:.0f}s) — position not confirmed", "WARNING")
+            self.motor_movement_status = False
+            return False
         # No bus — simulation.
         time.sleep(0.1)
         return True

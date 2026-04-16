@@ -283,6 +283,7 @@ class MeasurementMixin:
                     return False
                 else:
                     self.after(0, lambda: self._log_debug(f"{label} timeout at {position:.2f}\u00b0", "WARNING"))
+                    return False
         return True
 
     def _run_single_sweep(self, pol_angle: float) -> bool:
