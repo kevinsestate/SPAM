@@ -11,6 +11,12 @@ from backend import Measurement
 from core.calibration import (compute_k0, compute_tau_m, compute_gamma_m, lookup_cal_voltage,
                               ARM_STEP_DEG, MATERIAL_STEP_DEG, MATERIAL_START_DEG, MAX_ARM_DEG)
 
+# RF switch + log detector + AD7193 sinc³ filter need time to settle after a
+# path toggle. At FS=50 the conversion period is ~10 ms, so a 10 ms sleep let
+# the first conversion straddle the transient and produced bimodal voltages
+# in calibration sweeps (e.g. reflect |V| flipping 21 mV ↔ 75 mV).
+_RF_SWITCH_SETTLE_S = 0.08
+
 
 class MeasurementMixin:
     """Provides measurement sweep worker and start/stop/clear/view commands."""
@@ -123,17 +129,27 @@ class MeasurementMixin:
 
             if self.rf_switch is not None:
                 self.rf_switch.select_transmission()
-                time.sleep(0.01)
+                time.sleep(_RF_SWITCH_SETTLE_S)
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
                 else:
+                    # Prime: discard one conversion so the averaged reads
+                    # exclude the switch/detector transient.
+                    try:
+                        self._avg_stream_reads(1)
+                    except Exception:
+                        pass
                     i_tx, q_tx = self._avg_stream_reads(n)
 
                 self.rf_switch.select_reflection()
-                time.sleep(0.01)
+                time.sleep(_RF_SWITCH_SETTLE_S)
                 if self.adc.is_simulated:
                     i_rx, q_rx = self.adc.read_iq()
                 else:
+                    try:
+                        self._avg_stream_reads(1)
+                    except Exception:
+                        pass
                     i_rx, q_rx = self._avg_stream_reads(n)
             else:
                 # ADC-only mode: ch0 (I/AIN1) = TX, ch1 (Q/AIN2) = RX.
@@ -163,18 +179,28 @@ class MeasurementMixin:
             if self.rf_switch is not None:
                 # S21 (transmission): switch to RXt, read I/Q
                 self.rf_switch.select_transmission()
-                time.sleep(0.01)
+                time.sleep(_RF_SWITCH_SETTLE_S)
                 if self.adc.is_simulated:
                     i_tx, q_tx = self.adc.read_iq()
                 else:
+                    # Prime: discard one conversion to flush switch/detector
+                    # transient before the averaging window starts.
+                    try:
+                        self._avg_stream_reads(1)
+                    except Exception:
+                        pass
                     i_tx, q_tx = self._avg_stream_reads(n)
 
                 # S11 (reflection): switch to RXp, read I/Q
                 self.rf_switch.select_reflection()
-                time.sleep(0.01)
+                time.sleep(_RF_SWITCH_SETTLE_S)
                 if self.adc.is_simulated:
                     i_rx, q_rx = self.adc.read_iq()
                 else:
+                    try:
+                        self._avg_stream_reads(1)
+                    except Exception:
+                        pass
                     i_rx, q_rx = self._avg_stream_reads(n)
             else:
                 # ADC-only mode: ch0 (I) = TX/transmitted detector,
