@@ -365,7 +365,6 @@ class MeasurementMixin:
         self.after(0, lambda: self._update_status("Sweep 1/2: horn 0\u00b0", "info"))
 
         if self.adc is not None and not self.adc.is_simulated:
-            self.adc.stop_stream()
             self.adc.warmup()
         completed = self._run_single_sweep(pol_angle=0.0)
 
@@ -400,13 +399,13 @@ class MeasurementMixin:
             self.after(0, self._update_button_states)
             return
 
+        if self.adc is not None and not self.adc.is_simulated:
+            self.adc.warmup()
+
         # --- Polarization 1: sweep at horn 90 degrees ---
         self.after(0, lambda: self._log_debug("Sweep 2/2: horn at 90\u00b0", "INFO"))
         self.after(0, lambda: self._update_status("Sweep 2/2: horn 90\u00b0", "info"))
 
-        if self.adc is not None and not self.adc.is_simulated:
-            self.adc.stop_stream()
-            self.adc.warmup()
         completed = self._run_single_sweep(pol_angle=90.0)
 
         # --- Return horn to 0 degrees (horizontal polarization) ---

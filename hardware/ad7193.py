@@ -271,12 +271,8 @@ class AD7193:
                 self._streaming = False
                 return
             time.sleep(0.001)
-        # Mode change failed (bus returned 0xFFFFFF — MISO floating or mid-conversion).
-        # Hard reset to guarantee a clean state before next read.
-        self._log(f"AD7193: stop_stream failed to verify (mode=0x{actual_mode:06X}) — resetting", "WARNING")
-        self._reset()
-        time.sleep(0.005)
-        self._write_reg(_REG_CONFIG, self._config_by_channel.get(0, self._base_config | _DIFF_CH[0]), 3)
+        # If we get here, mode change failed - force flag anyway
+        self._log(f"AD7193: stop_stream failed to verify (mode=0x{actual_mode:06X})", "WARNING")
         self._streaming = False
 
     def read_iq_stream(self, timeout_s=0.1, fast_path=True):
