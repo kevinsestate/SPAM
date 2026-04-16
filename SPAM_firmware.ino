@@ -1,7 +1,9 @@
  #include <Wire.h>
 
-#define ERROR -1
-#define IDLE -1
+#define IDLE   -1
+#define CMD_ERROR -2
+
+#define DEBUG_SERIAL  // comment out to suppress all debug Serial prints
 
 // ===========================
 // I2C DEFINITIONS
@@ -36,7 +38,9 @@
 // ===========================
 // ENCODER SETTINGS
 // ===========================
-#define ARM_ENCODER_COUNTS (4000.0) // 4000.0 for motor encoder
+#define ARM_ENCODER_COUNTS  (4000.0) // quadrature counts per revolution
+#define MUT_ENCODER_COUNTS  (4000.0) // same encoder on MUT motor
+#define MUT_HOME_OFFSET_COUNTS (1000) // encoder counts from home switch to MUT zero reference
 
 
 // ===========================
@@ -183,8 +187,8 @@ void arm_homing_ISR(){
 
 void mut_homing_ISR(){
   if(mutHoming){
-    mutEncoderPosition = 1000; //(long)(90 * (ARM_ENCODER_COUNTS / 360.0))
-    mutTargetPositionCounts = 1000;//(long)(90 * (ARM_ENCODER_COUNTS / 360.0));
+    mutEncoderPosition = MUT_HOME_OFFSET_COUNTS;
+    mutTargetPositionCounts = MUT_HOME_OFFSET_COUNTS;
     mutHoming = false;
   }
   // else reportEvent(COLLISION);
@@ -244,16 +248,21 @@ void receiveEvent(int howMany) {
 
   position = posUnion.value;
 
+#ifdef DEBUG_SERIAL
   Serial.println(command);
   Serial.println(motorNum);
   Serial.println(position);
+#endif
 }
 
 
 void requestEvent() {
-    Wire.write(systemStatus);
-    systemStatus = 0;
-    digitalWrite(ALERT_INTERRUPT_PIN, LOW);
+    uint8_t snapshot = systemStatus;
+    Wire.write(snapshot);
+    systemStatus &= ~snapshot; // clear only the bits that were just sent
+    if (systemStatus == 0) {
+        digitalWrite(ALERT_INTERRUPT_PIN, LOW);
+    }
 }
 
 // ===========================
@@ -262,7 +271,7 @@ void requestEvent() {
 int commandHandler(){
   switch (command){
     case MOVE_MOTOR_ABS: 
-      if(motorNum != ARM_MOTOR && motorNum != MUT_MOTOR) return ERROR;
+      if(motorNum != ARM_MOTOR && motorNum != MUT_MOTOR) return CMD_ERROR;
       switch (motorNum) {
         case ARM_MOTOR:
           moveToPosition(position * GEAR_RATIO, ARM_MOTOR);
@@ -296,21 +305,21 @@ int commandHandler(){
 
       return SET_HOME;
     case START_HOMING_SEQ:
-      //move motors a long way so it hits the homing switches
+      // Move arm to home switch first, then MUT
       armHoming = true;
-      mutHoming = true;
       moveToPosition(GEAR_RATIO * -360, ARM_MOTOR);
       while(armHoming){
         updatePID();
       }
+      lastControlTime = micros(); // resync timer after blocking loop
 
       mutHoming = true;
       moveToPosition(360, MUT_MOTOR);
       while(mutHoming){
         updatePID();
       }
+      lastControlTime = micros(); // resync timer after blocking loop
 
-      // homing = false;
       command = IDLE; motorNum = IDLE;
       return START_HOMING_SEQ;
     case HALT:
@@ -412,9 +421,10 @@ void updatePID() {
         }
     }
 
-    // Debug print
+#ifdef DEBUG_SERIAL
+    // Debug print at 20 Hz
     static unsigned long lastDebug = 0;
-    if (millis() - lastDebug >= 50) { // 20 Hz
+    if (millis() - lastDebug >= 50) {
         lastDebug = millis();
         Serial.print("ARM Target=");
         Serial.print(armTargetPositionCounts);
@@ -439,6 +449,7 @@ void updatePID() {
         Serial.println(mutHoming);
         Serial.println("------------------------------------");
     }
+#endif
 }
 
 
@@ -448,45 +459,44 @@ void updatePID() {
 void moveToPosition(float degrees, int motorNum) {
     switch (motorNum){
       case ARM_MOTOR:
-        if(!armHoming && degrees > 80) position = 80;
-        armTargetPositionCounts = (long)(degrees * (ARM_ENCODER_COUNTS / 360.0)); // encoder counts per degree
+        if(!armHoming && degrees > 80) degrees = 80; // clamp degrees, not the global position
+        armTargetPositionCounts = (long)(degrees * (ARM_ENCODER_COUNTS / 360.0));
+        armHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
       case MUT_MOTOR:
-        mutTargetPositionCounts = (long)(degrees * (4000.0 / 360.0)); // encoder counts per degree
+        mutTargetPositionCounts = (long)(degrees * (MUT_ENCODER_COUNTS / 360.0));
+        mutHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
     }
-    armHasReportedArrival = false;
-    mutHasReportedArrival = false;
+#ifdef DEBUG_SERIAL
     Serial.print("motorNum: ");
     Serial.print(motorNum);
-    Serial.print("MoveTo: ");
+    Serial.print(" MoveTo: ");
     Serial.print(degrees);
-    Serial.print("arm deg -> ");
+    Serial.print(" arm deg -> ");
     Serial.print(armTargetPositionCounts);
     Serial.println(" counts");
-    Serial.print("mut deg -> ");
+    Serial.print(" mut deg -> ");
     Serial.print(mutTargetPositionCounts);
     Serial.println(" counts");
+#endif
 }
 
 
 // ===========================
 // CHECK IF POSITION REACHED
 // ===========================
-bool positionReached(long toleranceCounts = 5, int motorNum = 0) { // ~1 deg, x/4000 = 1/360 -> x = 11.11, ~0.5 deg -> x = 5.55
-    long pos;
-    if(motorNum == ARM_MOTOR) pos = getARMEncoderPosition();
-    if(motorNum == MUT_MOTOR) pos = getMUTEncoderPosition();
-    
-    // long pos = getEncoderPosition(motorNum);
-    long err;
+bool positionReached(long toleranceCounts = 5, int motorNum = 0) {
+    long err = LONG_MAX; // safe default — not reached if motorNum unknown
     switch (motorNum) {
       case ARM_MOTOR:
-        err = abs(armTargetPositionCounts - pos);
+        err = abs(armTargetPositionCounts - getARMEncoderPosition());
         break;
       case MUT_MOTOR:
-        err = abs(mutTargetPositionCounts - pos);
+        err = abs(mutTargetPositionCounts - getMUTEncoderPosition());
         break;
+      default:
+        return false;
     }
     return (err <= toleranceCounts);
 }
@@ -506,7 +516,7 @@ void setup() {
     Wire.onRequest(requestEvent);
 
     Serial.begin(115200);
-    while(!Serial); //halt until serial is set up
+    { unsigned long _t = millis(); while(!Serial && millis()-_t < 3000); } // 3s timeout
 
     pinMode(ARM_STEP_PIN, OUTPUT);
     pinMode(ARM_DIR_PIN, OUTPUT);
@@ -546,6 +556,7 @@ void setup() {
     mutLastB = digitalRead(MUT_ENCODER_B_PIN);
 
     Serial.println("Stepper PID Controller Ready");
+    lastControlTime = micros(); // ensure first PID tick isn't overdue
 }
 
 
@@ -553,37 +564,44 @@ void setup() {
 // MAIN LOOP
 // ===========================
 void loop() {
-    // PID update at 1 kHz
+    // PID update + position-reached check at 1 kHz
     unsigned long now = micros();
     if (now - lastControlTime >= controlIntervalMicros) {
         lastControlTime = now;
         updatePID();
-    }
 
-//POSITION REACHED LOGIC
-    if (!armHasReportedArrival && positionReached(5, ARM_MOTOR)) {
-        Serial.println("ARM POSITION REACHED");
-        reportEvent(ARM_POS_REACHED);
-        digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
-        armHasReportedArrival = true;
-    }
-    if (!mutHasReportedArrival && positionReached(5, MUT_MOTOR)) {
-        Serial.println("MUT POSITION REACHED");
-        reportEvent(MUT_POS_REACHED);
-        digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
-        mutHasReportedArrival = true;
+        // Position-reached logic runs inside the 1 kHz block to avoid
+        // firing hundreds of thousands of times per second
+        if (!armHasReportedArrival && positionReached(5, ARM_MOTOR)) {
+#ifdef DEBUG_SERIAL
+            Serial.println("ARM POSITION REACHED");
+#endif
+            reportEvent(ARM_POS_REACHED);
+            armHasReportedArrival = true;
+        }
+        if (!mutHasReportedArrival && positionReached(5, MUT_MOTOR)) {
+#ifdef DEBUG_SERIAL
+            Serial.println("MUT POSITION REACHED");
+#endif
+            reportEvent(MUT_POS_REACHED);
+            mutHasReportedArrival = true;
+        }
     }
 
 
 // COMMAND STATE MACHINE
   if(command != IDLE) {
     commandStatus = commandHandler();
-    if (commandStatus == ERROR){ //add more error statements
+    if (commandStatus == CMD_ERROR){ //add more error statements
+#ifdef DEBUG_SERIAL
       Serial.println("COMMAND HANDLER ERROR");
+#endif
       for(;;);
     }
     if(systemStatus == 1 << COLLISION){
+#ifdef DEBUG_SERIAL
       Serial.println("COLLISION DETECTED. HALTING");
+#endif
       for(;;); //implement enable pin to truly stop motors?
     }
   }
