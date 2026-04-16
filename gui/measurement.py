@@ -36,11 +36,15 @@ class MeasurementMixin:
         self.adc_demo_rx_v.append(rx_v)
         self.adc_demo_sample_count += 1
 
-        # Keep a bounded rolling window for responsive plotting on Pi.
-        while self.adc_demo_t and (t_rel - self.adc_demo_t[0]) > self.adc_demo_window_sec:
-            self.adc_demo_t.pop(0)
-            self.adc_demo_tx_v.pop(0)
-            self.adc_demo_rx_v.pop(0)
+        # Persistent buffer — keep the full run. Cleared by _reset_adc_demo_series()
+        # (e.g. on new measurement or Clear Measurements). Cap prevents runaway
+        # growth during long live-streaming sessions.
+        _MAX_ADC_DEMO_SAMPLES = 50000
+        if len(self.adc_demo_t) > _MAX_ADC_DEMO_SAMPLES:
+            drop = len(self.adc_demo_t) - _MAX_ADC_DEMO_SAMPLES
+            del self.adc_demo_t[:drop]
+            del self.adc_demo_tx_v[:drop]
+            del self.adc_demo_rx_v[:drop]
 
         n = len(self.adc_demo_t)
         if n >= 2:

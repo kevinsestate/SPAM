@@ -350,8 +350,8 @@ class GraphsMixin:
                 self.ax3.legend(loc='best', fontsize=9, framealpha=0.7, ncol=2)
             self._style_ax(self.ax3, "S21 \u2044 S11 Phase vs Angle", "Phase (\u00b0)")
 
-        # --- Graph 4: ADC live voltage — only redraw when ADC data changed ---
-        if self.is_measuring or self.adc_demo_graph_enabled:
+        # --- Graph 4: ADC voltage history — persist across sweep end. ---
+        if self.is_measuring or self.adc_demo_graph_enabled or self.adc_demo_sample_count > 0:
             self.ax4.clear()
             tt = self.adc_demo_t if self.adc_demo_t else []
             txv = self.adc_demo_tx_v if self.adc_demo_tx_v else []
@@ -363,17 +363,21 @@ class GraphsMixin:
                 tt_p = tt[-n_pts:]
                 tx_p = tx_mv[-n_pts:]
                 rx_p = rx_mv[-n_pts:]
-                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=2.2, label='I (J5)')
-                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=2.2, label='Q (J6)')
+                self.ax4.plot(tt_p, tx_p, color=p1, linewidth=1.8,
+                              marker='o', markersize=3, label='I (J5)')
+                self.ax4.plot(tt_p, rx_p, color=p2, linewidth=1.8,
+                              marker='s', markersize=3, label='Q (J6)')
                 self.ax4.legend(loc='upper right', fontsize=10, framealpha=0.7)
-                x0 = max(0.0, tt_p[-1] - self.adc_demo_window_sec)
-                self.ax4.set_xlim(x0, max(x0 + 1.0, tt_p[-1] + 0.2))
+                # Show the full captured history — no sliding window.
+                t_end = tt_p[-1]
+                pad = max(0.5, t_end * 0.02)
+                self.ax4.set_xlim(0.0, t_end + pad)
                 y0, y1 = self._adc_demo_ylim_mv(tx_p, rx_p)
                 self.ax4.set_ylim(y0, y1)
             else:
                 self.ax4.set_xlim(0, max(10.0, self.adc_demo_window_sec))
                 self.ax4.set_ylim(-100.0, 100.0)
-            adc_title = "ADC Live"
+            adc_title = f"ADC Voltage  ({n_pts} pts)" if n_pts > 0 else "ADC Voltage History"
             self._style_ax(self.ax4, adc_title, "Voltage (mV)", xlabel="Time (s)")
             self._render_adc_live_readout()
         else:
