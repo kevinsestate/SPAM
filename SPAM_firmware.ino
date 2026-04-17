@@ -251,9 +251,15 @@ void receiveEvent(int howMany) {
 
 
 void requestEvent() {
-    Wire.write(systemStatus);
-    systemStatus = 0;
-    digitalWrite(ALERT_INTERRUPT_PIN, LOW);
+    // Snapshot-then-clear so bits set between the snapshot and the
+    // write-out are preserved for the next master read, instead of being
+    // zeroed wholesale. Drop ALERT low only when nothing is pending.
+    uint8_t snapshot = systemStatus;
+    Wire.write(snapshot);
+    systemStatus &= ~snapshot; // clear only the bits that were just sent
+    if (systemStatus == 0) {
+        digitalWrite(ALERT_INTERRUPT_PIN, LOW);
+    }
 }
 
 // ===========================
@@ -448,15 +454,15 @@ void updatePID() {
 void moveToPosition(float degrees, int motorNum) {
     switch (motorNum){
       case ARM_MOTOR:
-        if(!armHoming && degrees > 80) position = 80;
+        if(!armHoming && degrees > 80) degrees = 80; // clamp local degrees, not the global position
         armTargetPositionCounts = (long)(degrees * (ARM_ENCODER_COUNTS / 360.0)); // encoder counts per degree
+        armHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
       case MUT_MOTOR:
         mutTargetPositionCounts = (long)(degrees * (4000.0 / 360.0)); // encoder counts per degree
+        mutHasReportedArrival = false; // only reset the flag for the motor being moved
         break;
     }
-    armHasReportedArrival = false;
-    mutHasReportedArrival = false;
     Serial.print("motorNum: ");
     Serial.print(motorNum);
     Serial.print("MoveTo: ");
@@ -553,25 +559,24 @@ void setup() {
 // MAIN LOOP
 // ===========================
 void loop() {
-    // PID update at 1 kHz
+    // PID update + position-reached check at 1 kHz.
+    // Running the position-reached check inside this gate stops it from
+    // firing tens of thousands of times per second on every loop() pass.
     unsigned long now = micros();
     if (now - lastControlTime >= controlIntervalMicros) {
         lastControlTime = now;
         updatePID();
-    }
 
-//POSITION REACHED LOGIC
-    if (!armHasReportedArrival && positionReached(20, ARM_MOTOR)) {
-        Serial.println("ARM POSITION REACHED");
-        reportEvent(ARM_POS_REACHED);
-        digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
-        armHasReportedArrival = true;
-    }
-    if (!mutHasReportedArrival && positionReached(20, MUT_MOTOR)) {
-        Serial.println("MUT POSITION REACHED");
-        reportEvent(MUT_POS_REACHED);
-        digitalWrite(ALERT_INTERRUPT_PIN, HIGH);
-        mutHasReportedArrival = true;
+        if (!armHasReportedArrival && positionReached(20, ARM_MOTOR)) {
+            Serial.println("ARM POSITION REACHED");
+            reportEvent(ARM_POS_REACHED);
+            armHasReportedArrival = true;
+        }
+        if (!mutHasReportedArrival && positionReached(20, MUT_MOTOR)) {
+            Serial.println("MUT POSITION REACHED");
+            reportEvent(MUT_POS_REACHED);
+            mutHasReportedArrival = true;
+        }
     }
 
 
