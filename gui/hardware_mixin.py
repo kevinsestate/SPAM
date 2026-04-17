@@ -38,17 +38,13 @@ class HardwareMixin:
                         finally:
                             if lock:
                                 lock.release()
-                        # Collision detection intentionally disabled: no
-                        # collision switch is physically wired and the MCU
-                        # firmware never attachInterrupt's collision_ISR, so
-                        # bit 0x01 only ever gets set via I2C read corruption
-                        # (seen as status bytes like 0xE1). Ignore it here.
-                        # Bit 0x02 = ARM_POS_REACHED, bit 0x04 = MUT_POS_REACHED.
-                        # Either one means the last commanded motor finished —
-                        # bump the sequence so _wait_for_motor_position can see
-                        # it even if this ISR read consumed the bit before the
-                        # poll loop got a chance (destructive requestEvent on MCU).
-                        if st & 0x06:
+                        if st & 0x01:
+                            self.motor_collision_detected = True
+                            self.after(0, lambda: self._log_debug("COLLISION DETECTED", "ERROR"))
+                            self.after(0, lambda: self.motor_status_var.set("COLLISION!"))
+                            if self.is_measuring:
+                                self.after(0, self._on_stop_measurement)
+                        if st & 0x02:
                             self._motor_done_seq += 1
                             self.after(0, lambda: self.motor_status_var.set("Ready"))
                     except OSError as e:
@@ -195,27 +191,6 @@ class HardwareMixin:
             self.motor_status_var.set("Error")
             if e.errno in (5, 121):  # EIO / EREMOTEIO — bus stuck, try to recover
                 self._recover_i2c_bus()
-                # One-shot retry after bus reopen. If the retry also fails we
-                # fall through and return False so the caller can abort / count
-                # the strike. Keeps cal sweeps alive through a single glitch.
-                try:
-                    lock = getattr(self, '_i2c_lock', None)
-                    if lock:
-                        lock.acquire()
-                    try:
-                        self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
-                    finally:
-                        if lock:
-                            lock.release()
-                    self._log_debug("Motor cmd retried OK after bus recovery", "WARNING")
-                    self.after(0, lambda: self.motor_status_var.set("Moving..."))
-                    self.motor_num = motor_num
-                    self.motor_command = command
-                    self.motor_position_var.set(f"{position:.1f}\u00b0")
-                    time.sleep(0.05)
-                    return True
-                except Exception as e2:
-                    self._log_debug(f"Motor cmd retry failed: {e2}", "ERROR")
             return False
         except Exception as e:
             self._log_debug(f"Motor cmd error: {e}", "ERROR")
@@ -237,25 +212,17 @@ class HardwareMixin:
             time.sleep(0.1)
             return True
         if self.motor_bus is not None:
-            # Poll MCU status register for bits 0x02 (ARM_POS_REACHED) or
-            # 0x04 (MUT_POS_REACHED). The GPIO ALERT ISR (handle_alert) also
-            # reads this register and the MCU's requestEvent clears it on
-            # every read — so the bit may be consumed by the ISR before we
-            # see it. Treat (_motor_done_seq >= _motor_expect_seq) as an
-            # equally valid "motor reached" signal to close that race.
+            # Poll MCU status register for bit 0x02 (position reached).
+            # The MCU only pulses GPIO17 for homing, not for regular moves,
+            # so ISR-based waiting is unreliable for moves — always poll I2C.
             mcu_address = int(self.connection_settings.get('microcontroller_address', '0x55'), 16)
             lock = getattr(self, '_i2c_lock', None)
-            expect = getattr(self, '_motor_expect_seq', self._motor_done_seq + 1)
             start = time.time()
-            # Phase 1: wait up to 2s for reached-bit to CLEAR (MCU accepted the command).
-            # Also break immediately if reached-bit is already SET or the ISR
-            # already bumped the sequence counter — motor finished instantly.
+            # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the command).
+            # Also break immediately if 0x02 is already SET — motor finished instantly.
             while (time.time() - start) < 2.0:
                 if self.motor_collision_detected:
                     return False
-                if self._motor_done_seq >= expect:
-                    self.motor_movement_status = True
-                    return True  # ISR already observed the completion edge
                 try:
                     if lock:
                         lock.acquire()
@@ -264,22 +231,18 @@ class HardwareMixin:
                     finally:
                         if lock:
                             lock.release()
-                    if not (st & 0x06):
-                        break  # bits cleared — MCU accepted and is moving
-                    if st & 0x06:
+                    if not (st & 0x02):
+                        break  # bit cleared — MCU accepted and is moving
+                    if st & 0x02:
                         self.motor_movement_status = True
                         return True  # already done — fast move completed before first poll
                 except Exception:
                     pass
                 time.sleep(0.05)
-            # Phase 2: wait for reached-bit to SET (motor reached position),
-            # or the ISR to bump the sequence counter.
+            # Phase 2: wait for 0x02 to SET (motor reached position).
             while (time.time() - start) < timeout:
                 if self.motor_collision_detected:
                     return False
-                if self._motor_done_seq >= expect:
-                    self.motor_movement_status = True
-                    return True
                 try:
                     if lock:
                         lock.acquire()
@@ -288,7 +251,7 @@ class HardwareMixin:
                     finally:
                         if lock:
                             lock.release()
-                    if st & 0x06:
+                    if st & 0x02:
                         self.motor_movement_status = True
                         return True
                 except Exception:
