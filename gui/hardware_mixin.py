@@ -220,9 +220,17 @@ class HardwareMixin:
             start = time.time()
             # Phase 1: wait up to 2s for 0x02 to CLEAR (MCU accepted the command).
             # Also break immediately if 0x02 is already SET — motor finished instantly.
+            # ISR-vs-poll race: the firmware's requestEvent is destructive (clears
+            # systemStatus on every I2C read). handle_alert also reads status on
+            # the GPIO17 rising edge, so whichever side reads first consumes the
+            # ARM_POS_REACHED bit. To stop one side from starving the other, we
+            # also treat a _motor_done_seq bump (ISR saw arrival) as completion.
             while (time.time() - start) < 2.0:
                 if self.motor_collision_detected:
                     return False
+                if self._motor_done_seq >= self._motor_expect_seq:
+                    self.motor_movement_status = True
+                    return True  # ISR already caught ARM_POS_REACHED — done
                 try:
                     if lock:
                         lock.acquire()
@@ -243,6 +251,9 @@ class HardwareMixin:
             while (time.time() - start) < timeout:
                 if self.motor_collision_detected:
                     return False
+                if self._motor_done_seq >= self._motor_expect_seq:
+                    self.motor_movement_status = True
+                    return True  # ISR caught arrival even if our poll just lost the race
                 try:
                     if lock:
                         lock.acquire()
