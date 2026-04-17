@@ -38,12 +38,11 @@ class HardwareMixin:
                         finally:
                             if lock:
                                 lock.release()
-                        if st & 0x01:
-                            self.motor_collision_detected = True
-                            self.after(0, lambda: self._log_debug("COLLISION DETECTED", "ERROR"))
-                            self.after(0, lambda: self.motor_status_var.set("COLLISION!"))
-                            if self.is_measuring:
-                                self.after(0, self._on_stop_measurement)
+                        # Collision detection intentionally disabled: no
+                        # collision switch is physically wired and the MCU
+                        # firmware never attachInterrupt's collision_ISR, so
+                        # bit 0x01 only ever gets set via I2C read corruption
+                        # (seen as status bytes like 0xE1). Ignore it here.
                         # Bit 0x02 = ARM_POS_REACHED, bit 0x04 = MUT_POS_REACHED.
                         # Either one means the last commanded motor finished —
                         # bump the sequence so _wait_for_motor_position can see
@@ -196,6 +195,27 @@ class HardwareMixin:
             self.motor_status_var.set("Error")
             if e.errno in (5, 121):  # EIO / EREMOTEIO — bus stuck, try to recover
                 self._recover_i2c_bus()
+                # One-shot retry after bus reopen. If the retry also fails we
+                # fall through and return False so the caller can abort / count
+                # the strike. Keeps cal sweeps alive through a single glitch.
+                try:
+                    lock = getattr(self, '_i2c_lock', None)
+                    if lock:
+                        lock.acquire()
+                    try:
+                        self.motor_bus.write_i2c_block_data(mcu_address, 0x00, message)
+                    finally:
+                        if lock:
+                            lock.release()
+                    self._log_debug("Motor cmd retried OK after bus recovery", "WARNING")
+                    self.after(0, lambda: self.motor_status_var.set("Moving..."))
+                    self.motor_num = motor_num
+                    self.motor_command = command
+                    self.motor_position_var.set(f"{position:.1f}\u00b0")
+                    time.sleep(0.05)
+                    return True
+                except Exception as e2:
+                    self._log_debug(f"Motor cmd retry failed: {e2}", "ERROR")
             return False
         except Exception as e:
             self._log_debug(f"Motor cmd error: {e}", "ERROR")

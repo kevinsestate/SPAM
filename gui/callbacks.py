@@ -62,6 +62,8 @@ class CallbacksMixin:
         """Background: sweep Through calibration (no material)."""
         angles = self._cal_sweep_angles()
         voltages = []
+        consecutive_fails = 0
+        _MAX_CAL_MOTOR_FAILS = 3
         for angle in angles:
             if not getattr(self, '_cal_running', False):
                 self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
@@ -70,10 +72,21 @@ class CallbacksMixin:
             self.current_angle = angle
             self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
-                self.after(0, lambda: self._log_debug("Cal through: motor fail", "ERROR"))
-                self._cal_running = False
-                self.after(0, lambda: self.status_var.set("Ready"))
-                return
+                consecutive_fails += 1
+                if consecutive_fails >= _MAX_CAL_MOTOR_FAILS:
+                    self.after(0, lambda: self._log_debug(
+                        "Cal through: motor fail (3 consecutive) — aborting", "ERROR"))
+                    self._cal_running = False
+                    self.after(0, lambda: self.status_var.set("Ready"))
+                    return
+                self.after(0, lambda a=angle, n=consecutive_fails: self._log_debug(
+                    f"Cal-Arm miss at {a:.0f}\u00b0 (strike {n}/{_MAX_CAL_MOTOR_FAILS}) — continuing",
+                    "WARNING"))
+                # Skip the voltage read at this angle but keep the list aligned
+                # with `angles` so downstream dicts line up — store a zero.
+                voltages.append([0.0, 0.0])
+                continue
+            consecutive_fails = 0
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_tx.real, v_tx.imag])
             self.after(0, lambda a=angle, v=v_tx: self._log_debug(
@@ -111,6 +124,8 @@ class CallbacksMixin:
         """Background: sweep Reflect calibration (metal sheet)."""
         angles = self._cal_sweep_angles()
         voltages = []
+        consecutive_fails = 0
+        _MAX_CAL_MOTOR_FAILS = 3
         for angle in angles:
             if not getattr(self, '_cal_running', False):
                 self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
@@ -119,10 +134,19 @@ class CallbacksMixin:
             self.current_angle = angle
             self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
             if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
-                self.after(0, lambda: self._log_debug("Cal reflect: motor fail", "ERROR"))
-                self._cal_running = False
-                self.after(0, lambda: self.status_var.set("Ready"))
-                return
+                consecutive_fails += 1
+                if consecutive_fails >= _MAX_CAL_MOTOR_FAILS:
+                    self.after(0, lambda: self._log_debug(
+                        "Cal reflect: motor fail (3 consecutive) — aborting", "ERROR"))
+                    self._cal_running = False
+                    self.after(0, lambda: self.status_var.set("Ready"))
+                    return
+                self.after(0, lambda a=angle, n=consecutive_fails: self._log_debug(
+                    f"Cal-Arm miss at {a:.0f}\u00b0 (strike {n}/{_MAX_CAL_MOTOR_FAILS}) — continuing",
+                    "WARNING"))
+                voltages.append([0.0, 0.0])
+                continue
+            consecutive_fails = 0
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_rx.real, v_rx.imag])
             self.after(0, lambda a=angle, v=v_rx: self._log_debug(
