@@ -3,6 +3,7 @@
 import os
 import json
 import csv
+import time
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -59,25 +60,64 @@ class CallbacksMixin:
         return MATERIAL_START_DEG + (arm_angle / ARM_STEP_DEG) * MATERIAL_STEP_DEG
 
     def _cal_through_worker(self):
-        """Background: sweep Through calibration (no material)."""
+        """Background: sweep Through calibration (no material).
+
+        Structured to mirror the measurement sweep in gui/measurement.py
+        (_run_single_sweep) exactly — no motor commands at angle 0, material
+        first then arm per subsequent angle, 150 ms settle before each ADC
+        read — so the cal behaves the same as the working measurement path.
+        """
         angles = self._cal_sweep_angles()
         voltages = []
-        for angle in angles:
+        arm_angle = 0.0
+        material_angle = MATERIAL_START_DEG
+
+        # --- Angle 0: take reading without any motor commands (arm is already
+        # at 0 from homing, material wherever homing left it). Matches
+        # measurement sweep's initial ADC read.
+        if not getattr(self, '_cal_running', False):
+            self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            return
+        self.current_angle = arm_angle
+        v_tx, v_rx = self._take_raw_voltage()
+        voltages.append([v_tx.real, v_tx.imag])
+        self.after(0, lambda a=arm_angle, v=v_tx: self._log_debug(
+            f"  Through {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        # --- Subsequent angles: material first, then arm, then settle, then read.
+        while arm_angle < MAX_ARM_DEG:
             if not getattr(self, '_cal_running', False):
                 self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
-            self.current_angle = angle
-            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
-            if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
-                self.after(0, lambda: self._log_debug("Cal through: motor fail", "ERROR"))
+            arm_angle += ARM_STEP_DEG
+            material_angle += MATERIAL_STEP_DEG
+            self.current_angle = arm_angle
+
+            # Move material first, then arm. Match measurement's handling:
+            # material failure is tolerated (continue to arm), arm failure
+            # aborts the cal.
+            self._move_motor_and_wait(2, material_angle, "Cal-Material")
+            if not self._move_motor_and_wait(1, arm_angle, "Cal-Arm"):
+                self.after(0, lambda a=arm_angle: self._log_debug(
+                    f"Cal through: arm fail at {a:.0f}\u00b0 — aborting", "ERROR"))
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
+
+            # Let I2C/PID pipeline settle before the ADC read. Measurement
+            # uses the same 0.15 s; without it cal queues the next MUT cmd
+            # before the firmware has finished processing this arrival.
+            time.sleep(0.15)
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_tx.real, v_tx.imag])
-            self.after(0, lambda a=angle, v=v_tx: self._log_debug(
+            self.after(0, lambda a=arm_angle, v=v_tx: self._log_debug(
                 f"  Through {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        # Realign the saved angle list to what we actually swept (should match
+        # self._cal_sweep_angles() but be explicit).
+        angles = [i * ARM_STEP_DEG for i in range(len(voltages))]
 
         # Store through reference
         self.cal_through = {a: complex(v[0], v[1]) for a, v in zip(angles, voltages)}
@@ -108,25 +148,52 @@ class CallbacksMixin:
         threading.Thread(target=self._cal_reflect_worker, daemon=True).start()
 
     def _cal_reflect_worker(self):
-        """Background: sweep Reflect calibration (metal sheet)."""
-        angles = self._cal_sweep_angles()
+        """Background: sweep Reflect calibration (metal sheet).
+
+        Mirrors _cal_through_worker and the measurement sweep: angle 0 reading
+        without motor commands, material-then-arm for subsequent angles, 150 ms
+        settle before each ADC read.
+        """
         voltages = []
-        for angle in angles:
+        arm_angle = 0.0
+        material_angle = MATERIAL_START_DEG
+
+        # --- Angle 0: no motor commands.
+        if not getattr(self, '_cal_running', False):
+            self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
+            self.after(0, lambda: self.status_var.set("Ready"))
+            return
+        self.current_angle = arm_angle
+        v_tx, v_rx = self._take_raw_voltage()
+        voltages.append([v_rx.real, v_rx.imag])
+        self.after(0, lambda a=arm_angle, v=v_rx: self._log_debug(
+            f"  Reflect {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        # --- Subsequent angles.
+        while arm_angle < MAX_ARM_DEG:
             if not getattr(self, '_cal_running', False):
                 self.after(0, lambda: self._log_debug("Calibration aborted", "WARNING"))
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
-            self.current_angle = angle
-            self._move_motor_and_wait(2, self._cal_material_angle(angle), "Cal-Material")
-            if not self._move_motor_and_wait(1, angle, "Cal-Arm"):
-                self.after(0, lambda: self._log_debug("Cal reflect: motor fail", "ERROR"))
+            arm_angle += ARM_STEP_DEG
+            material_angle += MATERIAL_STEP_DEG
+            self.current_angle = arm_angle
+
+            self._move_motor_and_wait(2, material_angle, "Cal-Material")
+            if not self._move_motor_and_wait(1, arm_angle, "Cal-Arm"):
+                self.after(0, lambda a=arm_angle: self._log_debug(
+                    f"Cal reflect: arm fail at {a:.0f}\u00b0 — aborting", "ERROR"))
                 self._cal_running = False
                 self.after(0, lambda: self.status_var.set("Ready"))
                 return
+
+            time.sleep(0.15)
             v_tx, v_rx = self._take_raw_voltage()
             voltages.append([v_rx.real, v_rx.imag])
-            self.after(0, lambda a=angle, v=v_rx: self._log_debug(
+            self.after(0, lambda a=arm_angle, v=v_rx: self._log_debug(
                 f"  Reflect {a:.0f}\u00b0: |V|={abs(v):.6f}", "INFO"))
+
+        angles = [i * ARM_STEP_DEG for i in range(len(voltages))]
 
         # Store reflect reference
         self.cal_reflect = {a: complex(v[0], v[1]) for a, v in zip(angles, voltages)}
