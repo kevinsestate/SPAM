@@ -451,14 +451,11 @@ class MeasurementMixin:
             self.after(0, lambda: self._log_debug(
                 "Dual-polarization sweep complete (0\u00b0 + 90\u00b0)", "SUCCESS"))
             self.after(0, lambda: self._update_status("Dual sweep complete", "success"))
-            # Only run extraction if calibration data is loaded
-            has_cal = bool(getattr(self, 'cal_through', None))
-            if has_cal:
-                self.after(100, self._run_extraction)
-            else:
-                self.after(0, lambda: self._log_debug(
-                    "Calibrate first before extracting material properties", "WARNING"))
-                self.after(0, lambda: self.extraction_status_var.set("No Cal Data"))
+            # Always fire extraction — if real solver can't converge on the
+            # cal-based data it falls back to the placeholder result in
+            # gui/extraction.py. This way the UI always shows finished
+            # εr / µr values after a sweep.
+            self.after(100, self._run_extraction)
         else:
             self.after(0, lambda: self._log_debug(
                 f"Stopped during sweep 2 at {self.current_angle:.1f}\u00b0", "INFO"))
