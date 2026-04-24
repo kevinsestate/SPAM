@@ -1,0 +1,55 @@
+Altium Designer Pick and Place Locations
+C:\Users\Public\Documents\Altium\PCB_DesignProjects\PCB_Projects\Brd4_che\Project Outputs for Brd4_che\Pick Place for PCB2.csv
+
+========================================================================================================================
+File Design Information:
+
+Date:       14/04/25
+Time:       20:59
+Revision:   Not in VersionControl
+Variant:    No variations
+Units used: mil
+
+"Designator","Comment","Layer","Footprint","Center-X(mil)","Center-Y(mil)","Rotation","Description"
+"C2","22uF","TopLayer","1206_Passive_Capacitor","620.000","2904.000","90","22uF ±10% 25V X5R 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"U3","DAC IC","TopLayer","MCP4725","1640.000","1645.000","180","IC DAC 12BIT V-OUT SOT23-6"
+"U2","ADS1115IDGSR","TopLayer","ADC_ADS1115IDGSR","785.000","1690.000","180","16-Bit ADC with Integrated MUX, PGA, Comparator, Oscillator, and Reference 10-VSSOP -40 to 125"
+"U1","MCP6002T-I/SN","TopLayer","SOIC127P600X175-8N","725.000","2205.000","180","0.6 V/us 2 1MHz 1.8V ~ 6V 100µA General Purpose SOIC-8_150mil  Operational Amplifier ROHS"
+"TP4","10x Probe TP","TopLayer","TP_Diff_Probe","1260.000","1785.000","180","Test Point 300 mil centers"
+"TP3","10x Probe TP","TopLayer","TP_Diff_Probe","1725.000","2235.000","90","Test Point 300 mil centers"
+"TP2","10x Probe TP","TopLayer","TP_Diff_Probe","1595.000","2700.000","90","Test Point 300 mil centers"
+"TP1","10x Probe TP","TopLayer","TP_Diff_Probe","1015.000","2710.000","90","Test Point 300 mil centers"
+"SW4","SW_2Pin_100mil_Switch","TopLayer","2Pin-Header-Conn","1835.000","2695.000","90","2Pin Header"
+"SW3","SW_2Pin_100mil_Switch","TopLayer","2Pin-Header-Conn","1900.000","2940.000","180","2Pin Header"
+"SW2","SW_2Pin_100mil_Switch","TopLayer","2Pin-Header-Conn","1305.000","2700.000","90","2Pin Header"
+"R7","1k","TopLayer","1206_Passive_Resitor","1200.000","1445.000","0","CHIP RESISTOR - SURFACE MOUNT 1KOHMS ±1% 1/4W 1206 ROHS"
+"R6","4.7KOhm","TopLayer","1206_Passive_Resitor","1590.000","2030.000","270","4.7kO ±1% 0.25W ±100ppm/? 1206 Chip Resistor - Surface Mount RoHS"
+"R5","10k","TopLayer","1206_Passive_Resitor","1435.000","2325.000","0","10 kOhms ±5% 0.25W, 1/4W Chip Resistor 1206 (3216 Metric) Automotive AEC-Q200 Thick Film"
+"R4","10 Ohm","TopLayer","1206_Passive_Resitor","1295.000","2085.000","90","CHIP RESISTOR - SURFACE MOUNT 0.1OHMS ±1% 1/4W 1206 ROHS"
+"R3","1k","TopLayer","1206_Passive_Resitor","1985.000","2325.000","270","CHIP RESISTOR - SURFACE MOUNT 1KOHMS ±1% 1/4W 1206 ROHS"
+"R2","0 Ohm","TopLayer","1206_Passive_Resitor","1061.000","2030.000","0","CHIP RESISTOR - SURFACE MOUNT 0OHMS ±1% 1/4W 1206 ROHS"
+"R1","1k","TopLayer","1206_Passive_Resitor","740.000","2655.000","0","CHIP RESISTOR - SURFACE MOUNT 1KOHMS ±1% 1/4W 1206 ROHS"
+"Q1","AO3400A","TopLayer","N-MOSFET","1065.000","2285.000","90","MOSFET N Trench 30V 5.7A 1.5V @ 250uA 26.5 m? @ 5.7A,10V SOT-23-3L RoHS"
+"P3","2P Screw Terminal Block","TopLayer","P_Terminal_block_3.5mm-pitch","2335.000","2905.000","90","Green Straight pin 3.5mm  pitch; P=3.5mm  Screw terminal ROHS"
+"P2","Power Jack","TopLayer","Power_Jack","158.464","3086.890","90","Power Barrel Connector Jack 2.10mm ID (0.083"), 5.50mm OD (0.217") Through Hole, Right Angle"
+"P1","Power Jack","TopLayer","Power_Jack","1218.465","3091.890","90","Power Barrel Connector Jack 2.10mm ID (0.083"), 5.50mm OD (0.217") Through Hole, Right Angle"
+"LED2","Green","TopLayer","LED_1206","2225.000","2330.000","270","Green 513~528nm 1206 Light Emitting Diodes (LED) RoHS"
+"LED1","Green","TopLayer","LED_1206","800.000","2905.000","270","Green 513~528nm 1206 Light Emitting Diodes (LED) RoHS"
+"J6","PPTC061LFBN-RC","TopLayer","6_PIN_ARD-Analog_100mil","220.000","495.000","270","6 Position Header Connector 0.100" (2.54mm) Through Hole Tin"
+"J5","PPTC081LFBN-RC","TopLayer","8_PIN_ARD-PWR_100MIL","220.000","1255.000","270","8 Position Header Connector 0.100" (2.54mm) Through Hole Tin"
+"J4","PPTC101LFBN-RC","TopLayer","10_PIN_ARDUINO_100MIL","2120.000","1555.000","270","10 Position Header Connector 0.100" (2.54mm) Through Hole Tin"
+"J3","PPTC081LFBN-RC","TopLayer","8_PIN_ARD-DIG_100MIL","2120.000","595.000","270","8 Position Header Connector 0.100" (2.54mm) Through Hole Tin"
+"J2","USB Mini","TopLayer","USB_MINI_B","1880.000","3325.000","180","Through Hole USB Connectors RoHS"
+"D4","IN-PI55QATPRPGPBPW","TopLayer","SERIAL_LED_-_duplicate","1825.000","1180.000","180","LIGHT EMITTING DIODES (LED) RGB 620~630NM RED, 520~530NM GREEN, 465~475NM BLUE 600MCD@16MARED,1200MCD@16MAGREEN,300MCD@16MABLUE TOP VIEW SMD-4 ROHS"
+"D3","IN-PI55QATPRPGPBPW","TopLayer","SERIAL_LED_-_duplicate","1435.000","1175.000","180","LIGHT EMITTING DIODES (LED) RGB 620~630NM RED, 520~530NM GREEN, 465~475NM BLUE 600MCD@16MARED,1200MCD@16MAGREEN,300MCD@16MABLUE TOP VIEW SMD-4 ROHS"
+"D2","IN-PI55QATPRPGPBPW","TopLayer","SERIAL_LED_-_duplicate","1055.000","1180.000","180","LIGHT EMITTING DIODES (LED) RGB 620~630NM RED, 520~530NM GREEN, 465~475NM BLUE 600MCD@16MARED,1200MCD@16MAGREEN,300MCD@16MABLUE TOP VIEW SMD-4 ROHS"
+"D1","IN-PI55QATPRPGPBPW","TopLayer","SERIAL_LED_-_duplicate","630.000","1190.000","0","LIGHT EMITTING DIODES (LED) RGB 620~630NM RED, 520~530NM GREEN, 465~475NM BLUE 600MCD@16MARED,1200MCD@16MAGREEN,300MCD@16MABLUE TOP VIEW SMD-4 ROHS"
+"C9","22uF","TopLayer","1206_Passive_Capacitor","495.000","885.000","270","22uF ±10% 25V X5R 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C8","22uF","TopLayer","1206_Passive_Capacitor","870.000","880.000","270","22uF ±10% 25V X5R 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C7","47nF","TopLayer","1206_Passive_Capacitor","1890.000","900.000","90","47nF ±5% 50V C0G 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C6","47nF","TopLayer","1206_Passive_Capacitor","1545.000","900.000","90","47nF ±5% 50V C0G 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C5","47nF","TopLayer","1206_Passive_Capacitor","1140.000","875.000","90","47nF ±5% 50V C0G 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C4","47nF","TopLayer","1206_Passive_Capacitor","680.000","885.000","90","47nF ±5% 50V C0G 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C3","22uF","TopLayer","1206_Passive_Capacitor","2235.000","2580.000","180","22uF ±10% 25V X5R 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"C1","22uF","TopLayer","1206_Passive_Capacitor","1345.000","875.000","90","22uF ±10% 25V X5R 1206 Multilayer Ceramic Capacitors MLCC - SMD/SMT RoHS"
+"BZ1","AT-1224-TWT-5V-2-R","TopLayer","BUZZER-_TH","1147.047","310.000","270","Buzzers Transducer, Externally Driven Electromechanical/Magnetic 5 V 40mA 2.4kHz 87dB @ 5V, 10cm Through Hole PC Pins"

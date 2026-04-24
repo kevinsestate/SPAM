@@ -1,0 +1,11 @@
+﻿"Symbol";"Value";"Unit";
+"TraceParts.PartNumber";"10-05042017-118861";"";
+"REFERENCE";"AXK 6590";"";
+"TraceParts.PartTitle";"Needle roller thrust bearings, needle roller and cage thrust assemblies";"";
+"TraceParts.InstanceId";"10-05042017-1188614CMY5E077GS47TZFELA1O2KWL";"";
+"DESIGN";"Needle roller thrust bearings, needle roller and cage thrust assemblies, Bore Ø 65 mm, Outside Ø 90 mm";"";
+"SUPPLIER";"SKF";"";
+"TraceParts.PartVersion";"1.1.9";"";
+"TRACEPARTS";"TRACEPARTS";"";
+"TraceParts.PartLanguage";"en";"";
+"MASS";"0.035";"";
