@@ -1,7 +1,7 @@
 # SPAM Assembly Instructions
 ### Useful links
-https://github.com/aaedmusa/Capstan-Drive/tree/main
-https://www.youtube.com/watch?v=MwIBTbumd1Q&pp=ygUNY2Fwc3RhbiBkcml2ZQ%3D%3D 
+- Capstan original designs: https://github.com/aaedmusa/Capstan-Drive/tree/main 
+- Capstan explenation video: https://www.youtube.com/watch?v=MwIBTbumd1Q&pp=ygUNY2Fwc3RhbiBkcml2ZQ%3D%3D 
 ---
 ### Important notes
 1. Whatever you do, do not slide any of the sliding components off of their respective rails. The sliders have loose ball bearings in them and it is not pretty
